@@ -229,9 +229,7 @@ class SerializerTest(parameterized.TestCase):
         arrays = [
             mock.Mock(
                 addressable_shards=[
-                    mock.Mock(
-                        replica_id=0, **{"data.nbytes": int(shard * 10**9), "data.shape": ()}
-                    )
+                    mock.Mock(replica_id=0, **{"data.nbytes": int(shard * 10**9), "data.shape": ()})
                     for shard in array
                 ],
                 nbytes=int(sum(array) * 10**9),
@@ -277,9 +275,7 @@ class SerializerTest(parameterized.TestCase):
                 f"{array_serialization.__name__}.serialization._get_metadata", lambda *_: {}
             ),
             mock.patch(f"{array_serialization.__name__}.ts.open", open_patch),
-            mock.patch(
-                f"{array_serialization.__name__}.ts.Spec", mock.MagicMock()
-            ),
+            mock.patch(f"{array_serialization.__name__}.ts.Spec", mock.MagicMock()),
         ):
             manager.serialize(arrays, tensorstore_specs, on_commit_callback=lambda: None)
             manager.wait_until_finished()

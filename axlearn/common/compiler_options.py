@@ -182,7 +182,7 @@ def default_xla_options(
 
 
 def _apply_overrides_from_env(
-    options: dict[str, Union[str, bool, int]]
+    options: dict[str, Union[str, bool, int]],
 ) -> dict[str, Union[str, bool, int]]:
     """Apply environment variable overrides to XLA options.
 

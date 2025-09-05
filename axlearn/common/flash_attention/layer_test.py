@@ -124,9 +124,11 @@ def _prepare_layers(
         num_heads=num_heads,
         dtype=jnp.bfloat16,
         dropout=Dropout.default_config().set(rate=dropout_rate),
-        input_linear=GroupedQKVLinear.default_config().set(num_kv_heads=num_kv_heads)
-        if num_kv_heads is not None
-        else QKVLinear.default_config(),
+        input_linear=(
+            GroupedQKVLinear.default_config().set(num_kv_heads=num_kv_heads)
+            if num_kv_heads is not None
+            else QKVLinear.default_config()
+        ),
         kv_cache=kv_cache,
     )
     ref_cfg = GroupedQueryAttention.default_config().set(**kwargs)
@@ -429,9 +431,11 @@ class TestFlashAttention(TestCase):
                 value_dim=hidden_dim,
                 num_heads=num_heads,
                 dtype=jnp.bfloat16,
-                input_linear=GroupedQKVLinear.default_config().set(num_kv_heads=num_kv_heads)
-                if num_kv_heads is not None
-                else QKVLinear.default_config(),
+                input_linear=(
+                    GroupedQKVLinear.default_config().set(num_kv_heads=num_kv_heads)
+                    if num_kv_heads is not None
+                    else QKVLinear.default_config()
+                ),
                 mha_dim_to_partition_spec={
                     "btnh": PartitionSpec("data", None, "model", None),
                     "bsnh": PartitionSpec("data", None, "model", None),
@@ -675,9 +679,11 @@ class TestFlashAttention(TestCase):
                 num_heads=num_heads,
                 dtype=jnp.bfloat16,
                 dropout=Dropout.default_config().set(rate=dropout_rate),
-                input_linear=GroupedQKVLinear.default_config().set(num_kv_heads=num_kv_heads)
-                if num_kv_heads is not None
-                else QKVLinear.default_config(),
+                input_linear=(
+                    GroupedQKVLinear.default_config().set(num_kv_heads=num_kv_heads)
+                    if num_kv_heads is not None
+                    else QKVLinear.default_config()
+                ),
             )
             if attn_type == "causal":
                 kwargs["mask"] = CausalAttentionBias.default_config()
@@ -1010,9 +1016,11 @@ class TestFlashAttention(TestCase):
                 num_heads=num_heads,
                 dtype=jnp.bfloat16,
                 dropout=Dropout.default_config().set(rate=0.0),
-                input_linear=GroupedQKVLinear.default_config().set(num_kv_heads=num_kv_heads)
-                if num_kv_heads is not None
-                else QKVLinear.default_config(),
+                input_linear=(
+                    GroupedQKVLinear.default_config().set(num_kv_heads=num_kv_heads)
+                    if num_kv_heads is not None
+                    else QKVLinear.default_config()
+                ),
                 logit_sink=logit_sink,
             )
 

@@ -290,8 +290,7 @@ def _splash_attention_forward(
     attn_logits_soft_cap: float | None = None,
     dropout_rate: float = 0.0,
     prng_key: jax.Array | None = None,
-) -> jax.Array:
-    ...
+) -> jax.Array: ...
 
 
 @overload
@@ -312,8 +311,7 @@ def _splash_attention_forward(
     attn_logits_soft_cap: float | None = None,
     dropout_rate: float = 0.0,
     prng_key: jax.Array | None = None,
-) -> SplashCustomReturnType:
-    ...
+) -> SplashCustomReturnType: ...
 
 
 def _splash_attention_forward(
@@ -715,7 +713,10 @@ def _splash_attention_fwd(
     dropout_rate: float = 0.0,
     prng_key: jax.Array | None = None,
     interpret: bool = False,
-) -> tuple[tuple[jax.Array], SplashResidualsType,]:
+) -> tuple[
+    tuple[jax.Array],
+    SplashResidualsType,
+]:
     if save_residuals:
         raise NotImplementedError("Higher-order AD not supported")
 

@@ -1812,7 +1812,7 @@ class ScaleQueryTest(TestCase):
             q_proj_scaled = q_proj_scaled * jax.nn.softplus(1.0) * 1.442695041
 
         if scale_factor is None:
-            scale_factor = kwargs["module"].config.per_head_dim ** -0.5
+            scale_factor = kwargs["module"].config.per_head_dim**-0.5
         scale_factor = float(scale_factor)
         q_proj_scaled = q_proj_scaled * scale_factor
 
@@ -2881,9 +2881,11 @@ class MultiheadAttentionTest(TestCase):
             kv_state=kv_state,
             return_aux=return_aux,
         )
-        with self.assertRaises(
-            ValueError
-        ) if scale_kv_before_cache_update else contextlib.nullcontext():
+        with (
+            self.assertRaises(ValueError)
+            if scale_kv_before_cache_update
+            else contextlib.nullcontext()
+        ):
             forward_outputs, _ = F(
                 layer,
                 state=layer_params,
