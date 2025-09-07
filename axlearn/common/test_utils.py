@@ -64,6 +64,12 @@ _PYTEST_OPT_REGISTERED = {}
 
 
 def assert_allclose(actual, desired, atol=1e-6, rtol=1e-3, err_msg=""):
+    if actual is None and desired is None:
+        return
+
+    if actual is None or desired is None:
+        raise AssertionError(f"One value is None and the other is not. actual: {actual}, desired: {desired}")
+
     actual = jnp.asarray(actual).astype(np.float32)
     desired = jnp.asarray(desired).astype(np.float32)
     # Checks if 'actual' and 'desired' are within (atol + rtol * abs(desired)).
