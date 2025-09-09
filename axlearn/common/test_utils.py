@@ -64,6 +64,7 @@ _PYTEST_OPT_REGISTERED = {}
 
 
 def assert_allclose(actual, desired, atol=1e-6, rtol=1e-3, err_msg=""):
+    # jax.numpy.asarray no longer supports NoneType in JAX 0.6.0. Adding manual check and exception for NoneType
     if actual is None and desired is None:
         return
 
