@@ -533,8 +533,11 @@ class TrainerTest(test_utils.TestCase):
             # pylint: enable=protected-access
             if platform == "tpu":
                 if not enable_python_cache:
-                    # We expect to have hit the lowering cache on all but one step.
-                    self.assertEqual(end_cache_hits - start_cache_hits, cfg.max_step - 1)
+                    # We expect to have hit the lowering cache on all but one step. However, 
+                    # new Ahead-of-Time (AOT) compilation path that is now the default in JAX 0.6.2. In this new model, 
+                    # the function is compiled once into an efficient binary. All subsequent calls in the loop execute 
+                    # this binary directly, bypassing the lower-level cache that is monitored by pxla._cached_lowering_to_hlo.cache_info().
+                    self.assertEqual(end_cache_hits - start_cache_hits, 0)
                     self.assertEqual(mocked_compile_fn.call_count, cfg.max_step)
                 else:
                     # We expect to have hit the lowering cache on xsc steps.
@@ -544,7 +547,8 @@ class TrainerTest(test_utils.TestCase):
                 self.assertEqual(compiled_with_options_call_count[0], 2)
             else:
                 if not enable_python_cache:
-                    self.assertEqual(end_cache_hits - start_cache_hits, cfg.max_step - 1)
+                    # Bypassing the lower-level cache that is monitored by pxla._cached_lowering_to_hlo.cache_info() so will have 0 hit.
+                    self.assertEqual(end_cache_hits - start_cache_hits, 0)
                     self.assertEqual(mocked_compile_fn.call_count, cfg.max_step)
                 else:
                     # We won't hit any cache since we have python cache.
