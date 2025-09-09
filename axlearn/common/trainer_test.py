@@ -544,7 +544,10 @@ class TrainerTest(test_utils.TestCase):
                     self.assertEqual(mocked_compile_fn.call_count, cfg.max_step)
                 else:
                     # We expect to have hit the lowering cache on xsc steps.
-                    self.assertEqual(end_cache_hits - start_cache_hits, 2)
+                    if jax.__version__ < '0.6.2':
+                        self.assertEqual(end_cache_hits - start_cache_hits, 2)
+                    else: 
+                        self.assertEqual(end_cache_hits - start_cache_hits, 0)
                     self.assertEqual(mocked_compile_fn.call_count, 3)
                 # Should have been called with compile options on two steps.
                 self.assertEqual(compiled_with_options_call_count[0], 2)
@@ -553,7 +556,7 @@ class TrainerTest(test_utils.TestCase):
                     if jax.__version__ < '0.6.2':
                         # Bypassing the lower-level cache that is monitored by pxla._cached_lowering_to_hlo.cache_info() so will have 0 hit.
                         self.assertEqual(end_cache_hits - start_cache_hits, cfg.max_step - 1)
-                    else: 
+                    else:
                         self.assertEqual(end_cache_hits - start_cache_hits, 0)
                     self.assertEqual(mocked_compile_fn.call_count, cfg.max_step)
                 else:
