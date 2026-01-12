@@ -20,6 +20,7 @@ from absl import logging
 from absl.testing import absltest, parameterized
 from jax.experimental import mesh_utils
 from jax.experimental.pjit import pjit
+from jax.interpreters.pxla import thread_resources
 
 from axlearn.common import layers, test_utils, utils
 from axlearn.common.base_model import BaseModel
@@ -63,8 +64,14 @@ NUM_BATCHES = 3
 
 
 def _build_input(
-    global_batch_size: int, *, data_partition: DataPartitionType, include_str_key: bool = False
+    global_batch_size: int,
+    *,
+    data_partition: DataPartitionType,
+    include_str_key: bool = False,
+    mesh: Optional[jax.sharding.Mesh] = None,
 ) -> Callable[[], Generator]:
+    mesh = thread_resources.env.physical_mesh if mesh is None else mesh
+
     def data_gen() -> Generator:
         for batch_ix in range(NUM_BATCHES):
             # Generate global input.
@@ -74,10 +81,18 @@ def _build_input(
             if data_partition == DataPartitionType.FULL:
                 examples_per_process = global_batch_size // jax.process_count()
                 start_ix = jax.process_index() * examples_per_process
-            else:
-                assert data_partition == DataPartitionType.REPLICATED
+            elif data_partition == DataPartitionType.REPLICATED:
                 examples_per_process = global_batch_size
                 start_ix = 0
+            elif data_partition == DataPartitionType.BATCH:
+                if mesh is None:
+                    raise ValueError("Mesh must be provided for BATCH data partition.")
+                num_batch_processes = mesh.shape["data"]
+                batch_process_index = jax.process_index() // num_batch_processes
+                examples_per_process = global_batch_size // num_batch_processes
+                start_ix = batch_process_index * examples_per_process
+            else:
+                raise ValueError(f"Unsupported data partition: {data_partition}")
 
             batch_input = x[start_ix : start_ix + examples_per_process, :]
             if include_str_key:
@@ -159,6 +174,10 @@ class DummyModel(BaseModel):
         self.predict_dtypes.append(x.dtype)
         return self.linear(x)
 
+    def score(self, input_batch: NestedTensor) -> Tensor:
+        y = self.predict(input_batch)
+        return y.sum(axis=-1)
+
     def predict_batch(self, input_batch: NestedTensor) -> NestedTensor:
         x = input_batch["x"]
         self.predict_dtypes.append(x.dtype)
@@ -173,8 +192,9 @@ def is_supported(
     global_batch_size: int,
     data_partition: DataPartitionType,
     use_ema: bool = False,
+    method: str = "predict",
 ):
-    del param_dtype, use_ema  # not used
+    del param_dtype, use_ema, method  # not used
     # TODO(xuan-zou): jax 0.4.25 breaks bfloat16 on CPU due to high variance on
     # the final result (up to 10% precision diff), will re-enable when fixed.
     # NOTE: bfloat16 test on GPU is added and verified.
@@ -300,8 +320,13 @@ class InferenceTest(test_utils.TestCase):
                 (jnp.float32, jnp.bfloat16),  # param_dtype
                 (None, jnp.float32, jnp.bfloat16),  # inference_dtype
                 (1, 16),  # global_batch_size
-                (DataPartitionType.FULL, DataPartitionType.REPLICATED),  # data_partition
+                (
+                    DataPartitionType.FULL,
+                    DataPartitionType.REPLICATED,
+                    DataPartitionType.BATCH,
+                ),  # data_partition
                 (True, False),  # whether use ema weight
+                ("predict", "score"),  # method
             ),
         )
     )
@@ -314,6 +339,7 @@ class InferenceTest(test_utils.TestCase):
         global_batch_size: int,
         data_partition: DataPartitionType,
         use_ema: bool,
+        method: str,
     ):
         logging.info(
             "platform=%s mesh_shape=%s global_batch_size=%s data_partition=%s",
@@ -374,10 +400,12 @@ class InferenceTest(test_utils.TestCase):
             )
 
         # Now try to run inference.
-        input_generator_fn = _build_input(global_batch_size, data_partition=data_partition)
+        input_generator_fn = _build_input(
+            global_batch_size, data_partition=data_partition, mesh=inference_runner.mesh()
+        )
         global_inputs = []
         global_outputs = []
-        for batch in inference_runner.run(input_generator_fn(), method="predict"):
+        for batch in inference_runner.run(input_generator_fn(), method=method):
             inputs = batch["inputs"]
             outputs = batch["outputs"]
             # Validate that inputs and outputs conform to the same sharding spec.
@@ -397,7 +425,15 @@ class InferenceTest(test_utils.TestCase):
         else:
             weight = state.model["linear"]["weight"].astype(inference_dtype)
             bias = state.model["linear"]["bias"].astype(inference_dtype)
-        expected_outputs = [el["x"].astype(inference_dtype) @ weight + bias for el in global_inputs]
+        if method == "predict":
+            expected_outputs = [
+                el["x"].astype(inference_dtype) @ weight + bias for el in global_inputs
+            ]
+        else:
+            expected_outputs = [
+                (el["x"].astype(inference_dtype) @ weight + bias).sum(axis=-1)
+                for el in global_inputs
+            ]
         self.assertEqual(utils.shapes(global_outputs), utils.shapes(expected_outputs))
         self.assertNestedAllClose(global_outputs, expected_outputs)
 
@@ -457,7 +493,11 @@ class InferenceTest(test_utils.TestCase):
             )
             inference_runner = cfg.set(name="test_inference_runner").instantiate(parent=None)
 
-        input_generator_fn = _build_input(global_batch_size, data_partition=data_partition)
+        input_generator_fn = _build_input(
+            global_batch_size,
+            data_partition=data_partition,
+            mesh=inference_runner.mesh(),
+        )
 
         # Run inference with module outputs.
         module_outputs_path = "input_stats/x_mean"
@@ -779,10 +819,13 @@ class InferenceTest(test_utils.TestCase):
 
         mock_summary_writer = mock.Mock(return_value=None)
 
-        with mock.patch(
-            "axlearn.common.summary_writer.SummaryWriter.Config.instantiate",
-            mock.MagicMock(return_value=mock_summary_writer),
-        ), tempfile.TemporaryDirectory() as local_tmp_dir:
+        with (
+            mock.patch(
+                "axlearn.common.summary_writer.SummaryWriter.Config.instantiate",
+                mock.MagicMock(return_value=mock_summary_writer),
+            ),
+            tempfile.TemporaryDirectory() as local_tmp_dir,
+        ):
             root_dir = local_tmp_dir if local_run else "gs://axlearn-public/testdata/inference_test"
             with set_data_dir(root_dir):
                 prng_key = jax.random.PRNGKey(11)
@@ -823,6 +866,100 @@ class InferenceTest(test_utils.TestCase):
                 mock_summary_writer.assert_any_call(step=0, values=mock.ANY)
                 mock_summary_writer.assert_any_call(step=1, values=mock.ANY)
                 mock_summary_writer.assert_any_call(step=2, values=mock.ANY)
+
+    @parameterized.parameters(
+        filter(
+            lambda params: is_supported(*params),
+            itertools.product(
+                ("cpu", "gpu", "tpu"),  # platform,
+                ((1, 1), (8, 1), (4, 1)),  # mesh_shape
+                (jnp.float32,),  # param_dtype
+                (jnp.float32,),  # inference_dtype
+                (16,),  # global_batch_size
+                (DataPartitionType.FULL,),  # data_partition
+            ),
+        )
+    )
+    def test_runner_with_passed_state(
+        self,
+        platform: str,
+        mesh_shape: tuple[int, int],
+        param_dtype: jnp.dtype,
+        inference_dtype: Optional[jnp.dtype],
+        global_batch_size: int,
+        data_partition: DataPartitionType,
+    ):
+        """Test that InferenceRunner can accept a pre-built inference_runner_state."""
+        logging.info(
+            "platform=%s mesh_shape=%s global_batch_size=%s data_partition=%s",
+            platform,
+            mesh_shape,
+            global_batch_size,
+            data_partition,
+        )
+        with tempfile.TemporaryDirectory() as local_tmp_dir:
+            prng_key = jax.random.PRNGKey(11)
+            local_run = jax.process_count() == 1
+            root_dir = local_tmp_dir if local_run else "gs://axlearn-public/testdata/inference_test"
+            mesh_axis_names = ("data", "model")
+
+            # Save ckpt.
+            _, ckpt_dir = self._build_ckpt(
+                prng_key=prng_key,
+                root_dir=root_dir,
+                mesh_shape=mesh_shape,
+                mesh_axis_names=mesh_axis_names,
+            )
+
+            # First, create a runner that loads state from checkpoint.
+            cfg1 = self._runner_config(
+                mesh_shape=mesh_shape,
+                mesh_axis_names=mesh_axis_names,
+                param_dtype=param_dtype,
+                inference_dtype=inference_dtype,
+                ckpt_dir=ckpt_dir,
+                data_partition=data_partition,
+            )
+            inference_runner1 = cfg1.set(name="test_inference_runner1").instantiate(parent=None)
+            loaded_state = inference_runner1.inference_runner_state
+
+            # Now create a second runner with the loaded state passed directly.
+            # Pass the state directly without using fake_state to ensure builder is bypassed.
+            cfg2 = self._runner_config(
+                mesh_shape=mesh_shape,
+                mesh_axis_names=mesh_axis_names,
+                param_dtype=param_dtype,
+                inference_dtype=inference_dtype,
+                ckpt_dir=ckpt_dir,
+                data_partition=data_partition,
+            )
+            inference_runner2 = cfg2.set(name="test_inference_runner2").instantiate(
+                parent=None, inference_runner_state=loaded_state
+            )
+
+            # Verify that both runners have the same state.
+            self.assertNestedEqual(
+                inference_runner1.inference_runner_state, inference_runner2.inference_runner_state
+            )
+
+            # Verify that inference works with the passed state.
+            input_generator_fn = _build_input(
+                global_batch_size,
+                data_partition=data_partition,
+                mesh=inference_runner1.mesh,
+            )
+            outputs1 = []
+            outputs2 = []
+
+            for batch1, batch2 in zip(
+                inference_runner1.run(input_generator_fn(), method="predict"),
+                inference_runner2.run(input_generator_fn(), method="predict"),
+            ):
+                outputs1.append(utils.replicate_to_local_data(batch1["outputs"]))
+                outputs2.append(utils.replicate_to_local_data(batch2["outputs"]))
+
+            # Outputs should be identical since they use the same state.
+            self.assertNestedAllClose(outputs1, outputs2)
 
 
 if __name__ == "__main__":

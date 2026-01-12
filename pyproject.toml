@@ -56,7 +56,7 @@ apple-silicon = [
 ]
 # Requirements for testing and development.
 dev = [
-    "black==25.1.0",  # formatting
+    "black==25.11.0",  # formatting
     "einops==0.8.0",  # for unittests only. Do not use it in core impl because it's not thread-safe.
     "evaluate",
     "isort==5.13.2",  # formatting
@@ -158,7 +158,7 @@ mmau = [
 # Orbax checkpointing.
 orbax = [
     "humanize==4.10.0",
-    "orbax-checkpoint==0.11.24",
+    "orbax-checkpoint==0.11.31",
 ]
 # Audio dependencies.
 audio = [

@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 
 ARG TARGET=base
-ARG BASE_IMAGE=ubuntu:24.04
+ARG BASE_IMAGE=ubuntu:22.04
+ARG BASE_IMAGE_COLOCATED=us-docker.pkg.dev/cloud-tpu-v2-images/pathways-colocated-python/sidecar:2025_10_29-python_3.10-jax_0.6.2
 
 FROM ${BASE_IMAGE} AS base
 
@@ -18,7 +19,7 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.
     curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
     apt-get update -y -qq && \
     apt-get install -y -qq apt-transport-https ca-certificates gcc g++ \
-    git screen ca-certificates google-perftools google-cloud-cli python3.12-venv && \
+    git screen ca-certificates google-perftools google-cloud-cli python3.10-venv python3.10-dev && \
     apt clean -y -qq
 
 # Setup.
@@ -102,11 +103,39 @@ COPY pyproject.toml README.md /root/
 RUN uv pip install -qq --prerelease=allow .[core,tpu] && uv cache clean
 RUN if [ -n "$EXTRAS" ]; then uv pip install -qq .[$EXTRAS] && uv cache clean; fi
 RUN if [ "$INSTALL_PATHWAYS_JAXLIB" = "true" ]; then \
-      uv pip install --prerelease=allow "jaxlib==0.5.3.dev20250918" \
+      uv pip install --prerelease=allow "jaxlib==0.6.2.dev20251021" \
         --find-links https://storage.googleapis.com/axlearn-wheels/wheels.html; \
     fi
 RUN uv pip install -qq --no-deps libtpu==0.0.28.dev20251104+nightly && uv cache clean
 COPY . .
+
+################################################################################
+# Colocated Python container spec.                                             #
+################################################################################
+
+FROM ${BASE_IMAGE_COLOCATED} AS colocated-python
+
+WORKDIR /app
+COPY . .
+
+# Install the additional user-provided dependencies, strictly enforcing the rules
+# from the base image's constraints file.
+RUN \
+    # 1. Install user-provided dependencies with modified constraints
+    grep -v "^numpy" /opt/venv/server_constraints.txt | grep -v "^scipy" > /tmp/modified_constraints.txt && \
+    echo "--> Installing user-provided dependencies..." && \
+    uv pip install ".[core,gcp]" -c /tmp/modified_constraints.txt && \
+    \
+    # 2. Override numpy and scipy with specific versions
+    uv pip install numpy==2.1.1 scipy==1.15.3 && \
+    \
+    # 3. Verify that the colocated_python_cpu_client is present.
+    echo "--> Verifying JAX patch integrity..." && \
+    python -c "from jax._src.lib import _jax; _jax.colocated_python_cpu_client" && \
+    echo "--> JAX patch verification successful." && \
+    \
+    # 4. Clean the cache to keep the image slim.
+    uv cache clean
 
 ################################################################################
 # GPU container spec.                                                          #

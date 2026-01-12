@@ -251,8 +251,7 @@ def _fix_metadata(tspec: dict[str, Any], shard_infos: list[_ShardInfo]):
 
 
 class TensorstoreSpecModifier:
-    def __call__(self, spec: dict[str, Any], *, shard_infos: list[_ShardInfo]):
-        ...
+    def __call__(self, spec: dict[str, Any], *, shard_infos: list[_ShardInfo]): ...
 
 
 async def _async_serialize(
@@ -305,8 +304,13 @@ async def _async_serialize(
         and jax.process_count() > 1
         and arr_inp.is_fully_addressable
     )
-    # pylint: disable-next=protected-access
-    if not serialization.ts_impl._spec_has_metadata(tensorstore_spec):
+    # pylint: disable=protected-access
+    spec_has_metadata = {
+        "0.6.2.dev0+selfbuilt": lambda: serialization.ts_impl._spec_has_metadata,
+        "0.6.2": lambda: serialization.ts_impl._spec_has_metadata,
+        "0.5.3": lambda: serialization._spec_has_metadata,
+    }[jax.__version__]()
+    if not spec_has_metadata(tensorstore_spec):
         # pylint: disable-next=protected-access
         tensorstore_spec["metadata"] = serialization._get_metadata(arr_inp)
     if "dtype" not in tensorstore_spec:
@@ -487,7 +491,12 @@ async def _async_deserialize(
     async def cb(index: array.Index, device: jax.Device):
         requested_domain = ts.IndexTransform(input_shape=shape)[index].domain
         restricted_domain = t.domain.intersect(requested_domain)
-        requested_bytes = serialization.ts_impl.estimate_read_memory_footprint(t, restricted_domain)
+        estimate_read_memory_footprint = {
+            "0.6.2.dev0+selfbuilt": lambda: serialization.ts_impl.estimate_read_memory_footprint,
+            "0.6.2": lambda: serialization.ts_impl.estimate_read_memory_footprint,
+            "0.5.3": lambda: serialization.estimate_read_memory_footprint,
+        }[jax.__version__]()
+        requested_bytes = estimate_read_memory_footprint(t, restricted_domain)
         # Limit the bytes read for every shard.
         await byte_limiter.wait_for_bytes(requested_bytes)
         read_ts = t[restricted_domain]
@@ -564,10 +573,13 @@ async def _async_deserialize(
         await byte_limiter.release_bytes(requested_bytes)
         return result
 
-    # pylint: disable-next=protected-access
-    return await serialization.ts_impl._create_async_array_from_callback(
-        shape, dtype, in_sharding, cb
-    )
+    # pylint: disable=protected-access
+    create_async_array_from_callback = {
+        "0.6.2.dev0+selfbuilt": lambda: serialization.ts_impl._create_async_array_from_callback,
+        "0.6.2": lambda: serialization.ts_impl._create_async_array_from_callback,
+        "0.5.3": lambda: serialization.create_async_array_from_callback,
+    }[jax.__version__]()
+    return await create_async_array_from_callback(shape, in_sharding, cb)
 
 
 # Reference:
@@ -647,6 +659,12 @@ class GlobalAsyncCheckpointManager(serialization.GlobalAsyncCheckpointManager):
         self.wait_until_finished()
 
         commit_futures = [[] for _ in range(len(tensorstore_specs))]
+
+        async_serialize = {
+            "0.6.2.dev0+selfbuilt": lambda: serialization.ts_impl.async_serialize,
+            "0.6.2": lambda: serialization.ts_impl.async_serialize,
+            "0.5.3": lambda: serialization.async_serialize,
+        }[jax.__version__]()
 
         # pylint: disable-next=redefined-outer-name
         async def _run_serializer():

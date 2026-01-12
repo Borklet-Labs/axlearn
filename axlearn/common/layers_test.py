@@ -383,9 +383,7 @@ class LayerTest(TestCase):
                     else paddings[:, :, None, None, None]
                 )
                 mask = 1 - expanded_paddings
-                square_sum = jnp.sum(
-                    outputs_by_group**2 * mask, axis=reduction_axis, keepdims=True
-                )
+                square_sum = jnp.sum(outputs_by_group**2 * mask, axis=reduction_axis, keepdims=True)
                 square_count = jnp.sum(
                     jnp.ones_like(outputs_by_group) * mask, axis=reduction_axis, keepdims=True
                 )
@@ -1072,6 +1070,17 @@ class LayerTest(TestCase):
                 self.assertEqual(orig_path, noisy_path)
                 assert_not_allclose(orig_value, noisy_value)
 
+    def test_variational_noise_independence(self):
+        """Test that VariationalNoise uses independent PRNG keys for each parameter."""
+        test_layer = VariationalNoise.default_config().set(vn_std=1.0).instantiate()
+        params = {"weight1": jnp.zeros((100,)), "weight2": jnp.zeros((100,))}
+        noisy_params = test_layer.apply(prng_key=jax.random.PRNGKey(42), params=params)
+        noise1 = noisy_params["weight1"]
+        noise2 = noisy_params["weight2"]
+        # Verify noise is independent.
+        correlation = jnp.corrcoef(jnp.stack([noise1, noise2]))[0, 1]
+        self.assertAlmostEqual(correlation, 0.0, places=1)
+
     @parameterized.product(drop_rate=(0, 0.5), num_cls_tokens=(0, 6))
     def test_drop_tokens(self, drop_rate, num_cls_tokens):
         batch_size, len_tokens, dim = 32, 50, 32
@@ -1348,7 +1357,7 @@ class EmbedTest(parameterized.TestCase):
                 dim,
                 num_embeddings,
                 rng,
-                scale=Embedding.Scale.CONSTANT
+                scale=Embedding.Scale.CONSTANT,
                 # Missing scale_constant
             )
         self.assertIn("scale_constant must be specified", str(cm.exception))
