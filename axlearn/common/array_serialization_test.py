@@ -556,5 +556,6 @@ class SerializerTest(parameterized.TestCase):
             expected,
         )
 
+
 if __name__ == "__main__":
     absltest.main()
