@@ -2951,7 +2951,6 @@ class TransformerAttentionLayer(BaseLayer):
             elif mode in (ForwardMode.PREFILL, ForwardMode.EXTEND_STEP):
                 assert cached_states is not None
                 assert target_positions is None
-
                 atten_state, atten_output = self.attention.extend_step(
                     cached_states["attention"],
                     target,
