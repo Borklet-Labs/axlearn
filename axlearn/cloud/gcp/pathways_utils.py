@@ -617,6 +617,7 @@ class PathwaysReplicatedJob(BaseReplicatedJob):
             shared=self._colocated_python.config.pathways_disable_shared_cache is not True,
         )
         pathways_tpu_version = get_pathways_tpu_version(system.gce_machine_type)
+        num_elastic_slices = 1
 
         # If multi-head, every pathways-head will only
         # be connected to one pathways instance (a pathways-worker replicated job).
@@ -625,6 +626,8 @@ class PathwaysReplicatedJob(BaseReplicatedJob):
         cmd_args = [
             f"--resource_manager_address=localhost:{_PATHWAYS_RESOURCE_MANAGER_PORT}",
             f"--server_port={_PATHWAYS_PROXY_PORT}",
+            f"--gcs_scratch_location={gcs_scratch_location}",
+            f"--num_elastic_slices={num_elastic_slices}",
         ]
         if self.config.pathways_debug:
             cmd_args.append(PATHWAYS_DEBUG_VMODULE)
