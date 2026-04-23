@@ -140,7 +140,8 @@ def setup():
         status_server = StatusHTTPServer(FLAGS.status_port)
         status_server.start()
 
-    devices = jax.devices()
+    # devices = jax.devices()  ##### may be update here ####
+    devices = live_devices()
     logging.info("Devices: %s", devices)
     local_devices = jax.local_devices()
     logging.info("Local Devices: %s", local_devices)
