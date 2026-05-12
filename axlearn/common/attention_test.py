@@ -2651,7 +2651,15 @@ class MultiheadAttentionTest(TestCase):
             self.skipTest(f"Unsupported mesh shape {mesh_shape}")
         model_dim = 16
         num_heads = 4
-        mesh = jax.make_mesh(mesh_shape, axis_names=("fsdp", "seq", "model"))
+        mesh = jax.make_mesh(
+            mesh_shape,
+            axis_names=("fsdp", "seq", "model"),
+            axis_types=(
+                jax.sharding.AxisType.Auto,
+                jax.sharding.AxisType.Auto,
+                jax.sharding.AxisType.Auto,
+            ),
+        )
         q_part = ("fsdp", "seq", "model", None)
         o_part = ("fsdp", "seq", None)
 
@@ -3471,8 +3479,8 @@ class ScaleFunctionsTest(TestCase):
         self.assertIn(str(key_scale_factor), hlo)
         # This test is unsupported on Jax 0.8.2 and later
         # TODO(rohit-chatterjee): Rewrite or disable test entirely
-        if jax.__version__ < "0.8.2":
-            self.assertNotIn(str(query_scale_factor * key_scale_factor), hlo)
+        # if jax.__version__ < "0.8.2":
+        #     self.assertNotIn(str(query_scale_factor * key_scale_factor), hlo)
 
     @parameterized.product(
         [
@@ -6425,7 +6433,7 @@ class LogitSinkTest(TestCase):
         self.assertIn("sink", param_specs)
         sink_spec = param_specs["sink"]
         self.assertEqual(sink_spec.shape, (num_heads,))
-        self.assertEqual(sink_spec.mesh_axes, ("model",))
+        self.assertEqual((sink_spec.mesh_axes), jax.P("model",))
         self.assertEqual(sink_spec.weight_decay_scale, 0.0)
 
     def test_logit_sink_disabled_by_default(self):
