@@ -8,6 +8,7 @@ from typing import Optional
 import jax
 import jax.numpy as jnp
 from absl import logging
+from jax.ad_checkpoint import checkpoint_name
 from jax import lax
 from jax._src.mesh import thread_resources
 from jax.experimental import pallas as pl
@@ -475,9 +476,9 @@ def _flash_attention_impl(
     )(q, k, v, ab, q_segment_ids, kv_segment_ids)
     if save_residuals:
         l, m = (v[..., 0] for v in aux[-2:])
-        o = jax.checkpoint_name(o, f"tpu_attention.{FLASH_ATTN_RESIDUAL_NAME}")
-        l = jax.checkpoint_name(l, f"tpu_attention.{FLASH_ATTN_RESIDUAL_NAME}")
-        m = jax.checkpoint_name(m, f"tpu_attention.{FLASH_ATTN_RESIDUAL_NAME}")
+        o = checkpoint_name(o, f"tpu_attention.{FLASH_ATTN_RESIDUAL_NAME}")
+        l = checkpoint_name(l, f"tpu_attention.{FLASH_ATTN_RESIDUAL_NAME}")
+        m = checkpoint_name(m, f"tpu_attention.{FLASH_ATTN_RESIDUAL_NAME}")
         return (o, l, m)
     else:
         return o

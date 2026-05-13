@@ -100,6 +100,7 @@ from typing import Any, Callable, Optional, Union
 
 import jax
 from absl import logging
+from jax.ad_checkpoint import checkpoint_name
 from jax import numpy as jnp
 
 from axlearn.common import param_init
@@ -793,7 +794,7 @@ class BaseLayer(Module):
             Tagged x.
         """
         full_name = f"{type(self).__name__}.{name}"
-        return jax.checkpoint_name(x, full_name)
+        return checkpoint_name(x, full_name)
 
     @property
     def parameters(self):

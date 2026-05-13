@@ -42,6 +42,7 @@ from typing import Literal, overload
 
 import jax
 import jax.numpy as jnp
+from jax.ad_checkpoint import checkpoint_name
 import numpy as np
 from jax import lax, tree_util
 from jax._src.pallas.mosaic import random as plrandom
@@ -655,9 +656,9 @@ def _splash_attention_forward(
         logsumexp = logsumexp[..., 0]
 
     if residual_checkpoint_name is not None:
-        out = jax.checkpoint_name(out, name=residual_checkpoint_name)
+        out = checkpoint_name(out, name=residual_checkpoint_name)
         if logsumexp is not None:
-            logsumexp = jax.checkpoint_name(logsumexp, name=residual_checkpoint_name)
+            logsumexp = checkpoint_name(logsumexp, name=residual_checkpoint_name)
     if save_residuals:
         return out, (logsumexp,)
     return out
