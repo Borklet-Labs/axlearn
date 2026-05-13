@@ -1,7 +1,6 @@
 # Copyright © 2023 Apple Inc.
 
 """Tests image classification models."""
-
 import jax.random
 import numpy as np
 from absl.testing import absltest, parameterized

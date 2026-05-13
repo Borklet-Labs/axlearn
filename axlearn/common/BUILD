@@ -3174,7 +3174,6 @@ py_test(
         "@axlearn_pip//pytest",
     ],
 )
-
 py_test(
     name = "encoder_decoder_test",
     size = "large",

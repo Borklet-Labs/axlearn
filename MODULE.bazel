@@ -30,5 +30,4 @@ use_repo(pip, "axlearn_pip")
 uv = use_extension("@rules_python//python/uv:uv.bzl", "uv")
 uv.configure(version = "0.9.25")
 use_repo(uv, "uv")
-
 register_toolchains("@uv//:all")
