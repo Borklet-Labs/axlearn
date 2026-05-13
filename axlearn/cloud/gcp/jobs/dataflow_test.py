@@ -8,7 +8,7 @@ from typing import Optional, Type, cast
 from unittest import mock
 
 from absl import app, flags
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
 
 from axlearn.cloud.common.bundler import BUNDLE_EXCLUDE, BaseDockerBundler, _bundlers
 from axlearn.cloud.common.utils import canonicalize_to_string, define_flags, from_flags
@@ -163,6 +163,7 @@ class UtilsTest(TestWithTemporaryCWD):
             if cfg.private_worker_pool:
                 spec_flags.append(f"--bundler_spec=private_worker_pool={cfg.private_worker_pool}")
             spec_flags.append(f"--bundler_spec=is_async={cfg.is_async}")
+            spec_flags.append(f"--bundler_spec=timeout_seconds={cfg.timeout_seconds}")
 
         all_flags = [f"--bundler_type={bundler_klass.TYPE}"] + spec_flags
         actual = _docker_bundler_to_flags(cfg, fv=fv)
@@ -217,3 +218,7 @@ class DataflowMainTest(TestWithTemporaryCWD):
         mock_cfg = {"bundler.repo": "a", "bundler.image": "b"}
         with _mock_job(running_from_vm, **mock_cfg):
             main(["cli", "start", "--", "cmd"])
+
+
+if __name__ == "__main__":
+    absltest.main()

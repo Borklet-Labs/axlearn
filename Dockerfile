@@ -37,26 +37,6 @@ RUN pip install -qq --upgrade pip && \
     pip cache purge
 
 ################################################################################
-# CI container spec.                                                           #
-################################################################################
-
-# Leverage multi-stage build for unit tests.
-FROM base AS ci
-
-COPY pyproject.toml README.md /root/
-# TODO(markblee): Remove gcp,vertexai_tensorboard from CI.
-RUN uv pip install -qq .[core,audio,orbax,dev,gcp,vertexai_tensorboard] && \
-    uv cache clean
-COPY . .
-
-# Defaults to an empty string, i.e. run pytest against all files.
-ARG PYTEST_FILES=''
-# Defaults to empty string, i.e. do NOT skip precommit
-ARG SKIP_PRECOMMIT=''
-# `exit 1` fails the build.
-RUN ./run_tests.sh $SKIP_PRECOMMIT "${PYTEST_FILES}"
-
-################################################################################
 # Bastion container spec.                                                      #
 ################################################################################
 
@@ -127,36 +107,6 @@ RUN \
     \
     # 4. Clean the cache to keep the image slim.
     uv cache clean
-
-################################################################################
-# GPU container spec.                                                          #
-################################################################################
-
-FROM base AS gpu
-
-# Enable the CUDA repository and install the required libraries (libnvrtc.so)
-RUN curl -o cuda-keyring_1.1-1_all.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
-    dpkg -i cuda-keyring_1.1-1_all.deb && \
-    apt-get update && apt-get install -y cuda-libraries-dev-12-8 ibverbs-utils && \
-    apt clean -y
-COPY pyproject.toml README.md /root/
-RUN uv pip install -qq .[core,gpu] && uv cache clean
-COPY . .
-
-################################################################################
-# GPU (ARM) container spec.                                                    #
-################################################################################
-
-FROM base AS gpu-arm
-
-# Enable the CUDA repository and install the required libraries (libnvrtc.so)
-RUN curl -o cuda-keyring_1.1-1_all.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb && \
-    dpkg -i cuda-keyring_1.1-1_all.deb && \
-    apt-get update && apt-get install -y cuda-libraries-dev-12-8 ibverbs-utils && \
-    apt clean -y
-COPY pyproject.toml README.md /root/
-RUN uv pip install -qq .[core,gpu] && uv cache clean
-COPY . .
 
 ################################################################################
 # Final target spec.                                                           #

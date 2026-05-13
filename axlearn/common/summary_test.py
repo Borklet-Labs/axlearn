@@ -6,14 +6,15 @@ import dataclasses
 import functools
 import os
 import tempfile
+import unittest
 
 import chex
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 import tensorflow as tf
 import wandb
+from absl.testing import absltest
 from jax.experimental.pjit import pjit
 from tensorboard.backend.event_processing import event_accumulator
 
@@ -236,8 +237,8 @@ class SummaryTest(TestCase):
                     logged_evaler_audio, info.audios(), rtol=0, atol=1 / 65536
                 )
 
-    @pytest.mark.skipif(wandb is None, reason="wandb package not installed.")
-    @pytest.mark.skipif("WANDB_API_KEY" not in os.environ, reason="wandb api key not found.")
+    @unittest.skipIf(wandb is None, "wandb package not installed.")
+    @unittest.skipIf("WANDB_API_KEY" not in os.environ, "wandb api key not found.")
     def test_callback_summary(self):
         class _TestModule(Module):
             """A test `Module`."""
@@ -303,3 +304,7 @@ class SummaryTest(TestCase):
         bad = ImageSummary(jax.numpy.ones((1, 1)))
         with self.assertRaises(ValueError):
             bad.validate()
+
+
+if __name__ == "__main__":
+    absltest.main()

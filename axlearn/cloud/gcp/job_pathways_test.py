@@ -4,7 +4,7 @@
 from typing import Optional, cast
 
 from absl import flags
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
 
 from axlearn.cloud.common.bundler import Bundler
 from axlearn.cloud.common.utils import define_flags, from_flags
@@ -25,7 +25,7 @@ class GKEPathwaysJobSetTest(TestCase):
         # Run tests under mock user and settings.
         self._settings = default_mock_settings()
         with mock_gcp_settings(
-            [jobset_utils.__name__, bundler.__name__],
+            [jobset_utils.__name__, bundler.__name__, pathways_utils.__name__],
             settings=self._settings,
         ):
             return super().run(result)
@@ -147,3 +147,7 @@ class GKEPathwaysJobSetTest(TestCase):
                     pathways_utils._PATHWAYS_WORKER_REPLICATED_JOB_NAME,  # pylint: disable=protected-access
                 ],
             )
+
+
+if __name__ == "__main__":
+    absltest.main()

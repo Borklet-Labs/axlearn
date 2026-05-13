@@ -6,7 +6,7 @@ from typing import Optional
 from unittest import mock
 
 from absl import flags
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
 
 from axlearn.cloud.gcp import node_pool as node_pool_utils
 from axlearn.cloud.gcp.node_pool import (
@@ -181,6 +181,51 @@ class NodePoolUtilsTest(parameterized.TestCase):
                 if additional_labels is not None:
                     for key, value in additional_labels.items():
                         self.assertEqual(value, labels_in_body.get(key, None))
+
+    @parameterized.product(
+        disk_type=[None, "pd-balanced"],
+        boot_disk_kms_key=[None, "projects/p/locations/l/keyRings/kr/cryptoKeys/k"],
+        enable_confidential_storage=[None, True, False],
+    )
+    def test_node_pool_body_disk_and_encryption(
+        self,
+        disk_type: Optional[str] = None,
+        boot_disk_kms_key: Optional[str] = None,
+        enable_confidential_storage: Optional[bool] = None,
+    ):
+        mock_settings = {
+            "service_account_email": "settings-service_account_email",
+        }
+        with mock_gcp_settings([node_pool_utils.__name__], mock_settings):
+            body = _node_pool_body(
+                name="node_pool0",
+                zone="test-zone",
+                num_nodes=1,
+                machine_type="test-machine-type",
+                disk_type=disk_type,
+                boot_disk_kms_key=boot_disk_kms_key,
+                enable_confidential_storage=enable_confidential_storage,
+            )
+
+            config_in_body = body["nodePool"]["config"]
+
+            if disk_type is not None:
+                self.assertEqual(disk_type, config_in_body["diskType"])
+            else:
+                self.assertNotIn("diskType", config_in_body)
+
+            if boot_disk_kms_key is not None:
+                self.assertEqual(boot_disk_kms_key, config_in_body["bootDiskKmsKey"])
+            else:
+                self.assertNotIn("bootDiskKmsKey", config_in_body)
+
+            if enable_confidential_storage is not None:
+                self.assertEqual(
+                    enable_confidential_storage,
+                    config_in_body["enableConfidentialStorage"],
+                )
+            else:
+                self.assertNotIn("enableConfidentialStorage", config_in_body)
 
     @parameterized.parameters(
         dict(fire_and_forget=True, exception=None, expected=None),
@@ -393,3 +438,7 @@ class NodePoolUtilsTest(parameterized.TestCase):
             jobset_namespace=jobset_namespace, jobset_name=jobset_name, index=index
         )
         self.assertEqual(expected, res)
+
+
+if __name__ == "__main__":
+    absltest.main()

@@ -12,14 +12,14 @@ from typing import Optional, Union
 from unittest import mock
 
 from absl import app, flags
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
 
 from axlearn.cloud.common.bastion import Job as BastionJob
 from axlearn.cloud.common.bastion import JobState as BastionJobState
 from axlearn.cloud.common.bastion import JobStatus, deserialize_jobspec, new_jobspec
 from axlearn.cloud.common.bundler import BUNDLE_EXCLUDE, Bundler
+from axlearn.cloud.common.job_types import JobSpec, Topology
 from axlearn.cloud.common.scheduler import JobMetadata
-from axlearn.cloud.common.types import JobSpec, Topology
 from axlearn.cloud.common.utils import FlagConfigurable, define_flags, from_flags
 from axlearn.cloud.gcp import bundler, node_pool_provisioner
 from axlearn.cloud.gcp.jobs import bastion_vm, launch
@@ -166,10 +166,10 @@ def _common_flags(job: BaseBastionManagedJob.Config) -> flags.FlagValues:
 class TestBaseBastionManagedJob(parameterized.TestCase):
     """Tests BaseBastionManagedJob."""
 
-    def run(self, **kwargs):
+    def run(self, *args, **kwargs):
         # Run tests under mock settings.
         with mock_gcp_settings([launch.__name__, bastion_vm.__name__, bundler.__name__]):
-            return super().run(**kwargs)
+            return super().run(*args, **kwargs)
 
     def _mock_config(
         self,
@@ -249,6 +249,13 @@ class TestBaseBastionManagedJob(parameterized.TestCase):
         patch_fns = mock.patch.multiple(
             launch.__name__,
             get_user_projects=mock.Mock(return_value=["other_project"]),
+            # Mocked because the real impl shells out to `curl` to hit the GCP metadata
+            # server, which isn't installed in the RBE container. False matches the
+            # implicit pre-existing behavior on local dev machines (curl present, but
+            # metadata server unreachable) and exercises the non-VM bundle/warning path.
+            # See https://REDACTED/foundation-models/axlearn/issues/2467 for
+            # a potentially better fix (replace curl with a pure-Python HTTP call).
+            running_from_vm=mock.Mock(return_value=False),
         )
         with patch_fns, self.assertRaisesRegex(ValueError, "other_project"):
             job = self._mock_config(action="run", project_id=project_id).instantiate()
@@ -259,6 +266,8 @@ class TestBaseBastionManagedJob(parameterized.TestCase):
         patch_fns = mock.patch.multiple(
             launch.__name__,
             get_user_projects=mock.Mock(return_value=["test_project"]),
+            # See note above re: mocking running_from_vm.
+            running_from_vm=mock.Mock(return_value=False),
         )
         with patch_fns:
             job = self._mock_config(action="run", project_id=project_id).instantiate()
@@ -393,7 +402,7 @@ class TestBaseBastionManagedJob(parameterized.TestCase):
 class TestBastionManagedGKEJob(TestWithTemporaryCWD):
     """Tests BastionManagedGKEJob."""
 
-    def run(self, **kwargs):  # pytype: disable=signature-mismatch
+    def run(self, *args, **kwargs):
         # Run tests under mock settings.
         self._settings = default_mock_settings()
         patch_name = mock.patch(f"{launch.__name__}.generate_job_name", return_value="job-name")
@@ -410,7 +419,7 @@ class TestBastionManagedGKEJob(TestWithTemporaryCWD):
                 settings=self._settings,
             ),
         ):
-            return super().run(**kwargs)
+            return super().run(*args, **kwargs)
 
     @parameterized.product(
         [
@@ -653,7 +662,7 @@ class TestBastionManagedGKEJob(TestWithTemporaryCWD):
 
 
 class MainTest(parameterized.TestCase):
-    def run(self, **kwargs):
+    def run(self, *args, **kwargs):
         # Run tests under mock settings.
         patch_kube = mock.patch.multiple(launch.__name__, load_kube_config=mock.DEFAULT)
         with (
@@ -668,7 +677,7 @@ class MainTest(parameterized.TestCase):
                 ]
             ),
         ):
-            return super().run(**kwargs)
+            return super().run(*args, **kwargs)
 
     @parameterized.parameters(
         # Test that runner name is inferred from instance type.
@@ -910,3 +919,7 @@ class MainTest(parameterized.TestCase):
             fv(argv)  # Parse flags.
             launch.main(argv, fv=fv)
             self.assertTrue(mock_job.list.called)
+
+
+if __name__ == "__main__":
+    absltest.main()

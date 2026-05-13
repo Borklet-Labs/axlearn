@@ -194,3 +194,13 @@ class GetTrainerConfigTest(TestCase):
 
             # Verify that the pre-existing value was not overridden
             self.assertEqual(cfg.crash_on_hang_timeout_seconds, 5000)
+
+
+if __name__ == "__main__":
+    import sys
+
+    import pytest
+
+    # pytest.main is required here: importing axlearn.common.launch_trainer registers absl flags
+    # with None defaults. absltest.main() triggers flag parsing which rejects None values.
+    sys.exit(pytest.main([__file__]))

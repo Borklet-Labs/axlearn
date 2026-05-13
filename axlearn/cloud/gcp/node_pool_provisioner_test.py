@@ -7,14 +7,14 @@ from datetime import datetime
 from unittest import mock
 
 from absl import flags
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
 
 from axlearn.cloud.common.bastion import (
     _BASTION_SERIALIZED_JOBSPEC_ENV_VAR,
     new_jobspec,
     serialize_jobspec,
 )
-from axlearn.cloud.common.types import JobMetadata
+from axlearn.cloud.common.job_types import JobMetadata
 from axlearn.cloud.common.utils import define_flags, from_flags
 from axlearn.cloud.gcp import bundler, node_pool_provisioner
 from axlearn.cloud.gcp.bundler import ArtifactRegistryBundler
@@ -246,3 +246,54 @@ class TPUNodePoolProvisionerTest(parameterized.TestCase):
 
             self.assertEqual(num_replicas, mock_construct_node_pool_name.call_count)
             self.assertEqual(1, mock_delete_node_pools.call_count)
+
+    @parameterized.parameters(
+        dict(
+            disk_type="pd-balanced",
+            boot_disk_kms_key="projects/p/locations/l/keyRings/kr/cryptoKeys/k",
+            enable_confidential_storage=True,
+        ),
+        dict(
+            disk_type=None,
+            boot_disk_kms_key=None,
+            enable_confidential_storage=None,
+        ),
+        dict(
+            disk_type=None,
+            boot_disk_kms_key=None,
+            enable_confidential_storage=False,
+        ),
+    )
+    def test_create_for_disk_and_encryption_settings(
+        self,
+        disk_type,
+        boot_disk_kms_key,
+        enable_confidential_storage,
+    ):
+        mock_create_node_pools = mock.Mock()
+        mock_construct_node_pool_name = mock.Mock()
+
+        mock_utils = mock.patch.multiple(
+            node_pool_provisioner.__name__,
+            create_node_pools=mock_create_node_pools,
+            construct_node_pool_name=mock_construct_node_pool_name,
+        )
+
+        job_cfg, bundler_cfg, provisioner_cfg = self._mock_configs(num_replicas=1)
+        provisioner_cfg.disk_type = disk_type
+        provisioner_cfg.boot_disk_kms_key = boot_disk_kms_key
+        provisioner_cfg.enable_confidential_storage = enable_confidential_storage
+        with mock_utils:
+            tpu_gke_job = job_cfg.instantiate(bundler=bundler_cfg.instantiate())
+            provisioner = provisioner_cfg.set(name="pre-provisioner-0").instantiate()
+
+            provisioner.create_for(tpu_gke_job)
+
+            kwargs = mock_create_node_pools.call_args.kwargs
+            self.assertEqual(disk_type, kwargs["disk_type"])
+            self.assertEqual(boot_disk_kms_key, kwargs["boot_disk_kms_key"])
+            self.assertEqual(enable_confidential_storage, kwargs["enable_confidential_storage"])
+
+
+if __name__ == "__main__":
+    absltest.main()

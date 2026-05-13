@@ -10,18 +10,18 @@ import signal
 import subprocess
 import tempfile
 import time
+import unittest
 from collections.abc import Sequence
 from typing import Optional, Union
 from unittest import mock
 
 import psutil
-import pytest
 from absl import app, flags
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
 
 from axlearn.cloud import ROOT_MODULE
 from axlearn.cloud.common import utils
-from axlearn.cloud.common.types import Topology
+from axlearn.cloud.common.job_types import Topology
 from axlearn.common.config import REQUIRED, ConfigBase, Configurable, Required, config_class
 from axlearn.common.test_utils import TestWithTemporaryCWD
 
@@ -111,7 +111,7 @@ class UtilsTest(TestWithTemporaryCWD):
             self.assertEqual(expected, utils.parse_action(argv, options=options, default=default))
 
     # TODO(markblee): Understand and fix flakiness on CI.
-    @pytest.mark.skip(reason="Intended to be run manually, can be flaky in CI.")
+    @unittest.skip("Intended to be run manually, can be flaky in CI.")
     def test_send_signal(self):
         """Tests send_signal by starting a subprocess which has child subprocesses.
 
@@ -181,7 +181,7 @@ class UtilsTest(TestWithTemporaryCWD):
             self.fail("send_signal() raised NoSuchProcess unexpectedly!")
 
     # TODO(tom_gunter,markblee): Understand & fix flakiness on CI.
-    @pytest.mark.skip(reason="Passes locally & in docker but fails on CI, to be fixed.")
+    @unittest.skip("Passes locally & in docker but fails on CI, to be fixed.")
     def test_copy_blobs(self):
         with tempfile.TemporaryDirectory() as read_dir:
             read_dir_path = pathlib.Path(read_dir)
@@ -665,3 +665,7 @@ class FlagConfigurableTest(parameterized.TestCase):
         cfg = NotMapping.default_config()
         with self.assertRaisesRegex(ValueError, "mapping at inner"):
             utils.define_flags(cfg, fv)
+
+
+if __name__ == "__main__":
+    absltest.main()

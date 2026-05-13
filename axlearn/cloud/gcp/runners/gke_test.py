@@ -13,7 +13,7 @@ from unittest import mock
 import kubernetes as k8s
 import requests
 from absl import flags
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
 
 from axlearn.cloud.common.bastion import BASTION_JOB_VERSION_ENV_VAR
 from axlearn.cloud.common.bundler import Bundler
@@ -221,17 +221,23 @@ class GPUGKERunnerJobTest(parameterized.TestCase):
             bundler=mock.create_autospec(Bundler)
         )
 
-        with mock.patch.multiple(
-            job,
-            _get_status=mock.Mock(
-                side_effect=[
-                    runner_gke.GKERunnerJob.Status.NOT_STARTED,
-                    runner_gke.GKERunnerJob.Status.COMPLETED,
-                ]
+        with (
+            mock.patch.multiple(
+                job,
+                _get_status=mock.Mock(
+                    side_effect=[
+                        runner_gke.GKERunnerJob.Status.NOT_STARTED,
+                        runner_gke.GKERunnerJob.Status.COMPLETED,
+                    ]
+                ),
+                _delete=mock.DEFAULT,
+                _inner=mock.DEFAULT,
+                _pre_provisioner=mock.DEFAULT,
             ),
-            _delete=mock.DEFAULT,
-            _inner=mock.DEFAULT,
-            _pre_provisioner=mock.DEFAULT,
+            mock.patch(
+                f"{runner_gke.__name__}._get_mismatched_node_pools",
+                return_value=[],
+            ),
         ):
             job._inner._builder.config.image_id = None
             job._execute()
@@ -690,6 +696,7 @@ class TPUGKERunnerJobTest(parameterized.TestCase):
                 expected=runner_gke.GKERunnerJob.Status.RESCHEDULED,
             ),
             # Number of replicated job statuses do not match slices.
+            # One ready but spec has no replicas count: treated as pending (partial degradation).
             GetStatusTestConfig(
                 tier=None,
                 job_version=None,
@@ -700,7 +707,7 @@ class TPUGKERunnerJobTest(parameterized.TestCase):
                 ),
                 spec=dict(replicatedJobs=_mock_replicated_jobs(["spot"])),
                 num_slices=2,
-                expected=runner_gke.GKERunnerJob.Status.UNKNOWN,
+                expected=runner_gke.GKERunnerJob.Status.PENDING,
             ),
             # All replicated jobs succeeded. No need to wait for jobset conditions.
             GetStatusTestConfig(
@@ -892,7 +899,7 @@ class TPUGKERunnerJobTest(parameterized.TestCase):
                     }
                 },
                 topology_assignment='[["slice3", "slice4"]]',
-                expected=runner_gke.GKERunnerJob.Status.RESCHEDULED,
+                expected=runner_gke.GKERunnerJob.Status.PATCHED,
             ),
             # Topology set in builder but no annotation deployed yet: mismatch -> RESCHEDULED.
             GetStatusTestConfig(
@@ -906,7 +913,91 @@ class TPUGKERunnerJobTest(parameterized.TestCase):
                 spec=dict(replicatedJobs=_mock_replicated_jobs(["test-reservation"], None, 1)),
                 metadata={"annotations": {}},
                 topology_assignment='[["slice1", "slice2"]]',
+                expected=runner_gke.GKERunnerJob.Status.PATCHED,
+            ),
+            # Partial degradation (ready=7/8, tier promoted): treated as pending → RESCHEDULED.
+            GetStatusTestConfig(
+                tier="0",
+                job_version=None,
+                status=dict(replicatedJobsStatus=[dict(ready=7, failed=0, succeeded=0)]),
+                spec=dict(replicatedJobs=_mock_replicated_jobs(["spot"], num_replicas=8)),
+                num_slices=1,
                 expected=runner_gke.GKERunnerJob.Status.RESCHEDULED,
+            ),
+            # Partial degradation without tier mismatch: returns PENDING (not UNKNOWN).
+            GetStatusTestConfig(
+                tier=None,
+                job_version=None,
+                status=dict(replicatedJobsStatus=[dict(ready=7, failed=0, succeeded=0)]),
+                spec=dict(replicatedJobs=_mock_replicated_jobs(["spot"], num_replicas=8)),
+                num_slices=1,
+                expected=runner_gke.GKERunnerJob.Status.PENDING,
+            ),
+            # All failed (retryable): still PENDING/RESCHEDULED, not FAILED.
+            GetStatusTestConfig(
+                tier=None,
+                job_version=None,
+                status=dict(replicatedJobsStatus=[dict(ready=0, failed=8, succeeded=0)]),
+                spec=dict(replicatedJobs=_mock_replicated_jobs(["spot"], num_replicas=8)),
+                num_slices=1,
+                expected=runner_gke.GKERunnerJob.Status.PENDING,
+            ),
+            # Fully running (ready == total): READY, not PENDING.
+            GetStatusTestConfig(
+                tier="0",
+                job_version=None,
+                status=dict(replicatedJobsStatus=[dict(ready=8, failed=0, succeeded=0)]),
+                spec=dict(replicatedJobs=_mock_replicated_jobs(["spot"], num_replicas=8)),
+                num_slices=1,
+                expected=runner_gke.GKERunnerJob.Status.READY,
+            ),
+            # Mixed ready/succeeded (some done, some still running): READY, not PENDING.
+            GetStatusTestConfig(
+                tier=None,
+                job_version=None,
+                status=dict(replicatedJobsStatus=[dict(ready=7, succeeded=1, failed=0)]),
+                spec=dict(replicatedJobs=_mock_replicated_jobs(["spot"], num_replicas=8)),
+                num_slices=1,
+                expected=runner_gke.GKERunnerJob.Status.READY,
+            ),
+            # Mixed ready/succeeded with tier mismatch: READY, not RESCHEDULED. The job is
+            # actively running so we don't interrupt it even if the tier changed.
+            GetStatusTestConfig(
+                tier="0",
+                job_version=None,
+                status=dict(replicatedJobsStatus=[dict(ready=7, succeeded=1, failed=0)]),
+                spec=dict(replicatedJobs=_mock_replicated_jobs(["spot"], num_replicas=8)),
+                num_slices=1,
+                expected=runner_gke.GKERunnerJob.Status.READY,
+            ),
+            # Mixed ready/succeeded/failed: failed gate excludes the sum==total branch,
+            # so the job falls through to PENDING/RESCHEDULED.
+            GetStatusTestConfig(
+                tier=None,
+                job_version=None,
+                status=dict(replicatedJobsStatus=[dict(ready=4, succeeded=3, failed=1)]),
+                spec=dict(replicatedJobs=_mock_replicated_jobs(["spot"], num_replicas=8)),
+                num_slices=1,
+                expected=runner_gke.GKERunnerJob.Status.PENDING,
+            ),
+            # Some replicas in Active state (not tracked): sum < total, treated as PENDING.
+            # This mirrors the original weiwei concern: Active=6, Ready=0, Succeeded=1.
+            GetStatusTestConfig(
+                tier=None,
+                job_version=None,
+                status=dict(replicatedJobsStatus=[dict(ready=0, succeeded=1, failed=0)]),
+                spec=dict(replicatedJobs=_mock_replicated_jobs(["spot"], num_replicas=8)),
+                num_slices=1,
+                expected=runner_gke.GKERunnerJob.Status.PENDING,
+            ),
+            # Empty replicatedJobs list: total_job_count=0 should not match zero counts.
+            GetStatusTestConfig(
+                tier=None,
+                job_version=None,
+                status=dict(replicatedJobsStatus=[dict(ready=0, failed=0, succeeded=0)]),
+                spec=dict(replicatedJobs=[]),
+                num_slices=1,
+                expected=runner_gke.GKERunnerJob.Status.PENDING,
             ),
         ),
         enable_pre_provisioner=(None, False, True),
@@ -1230,6 +1321,12 @@ class TPUGKERunnerJobTest(parameterized.TestCase):
                     _delete=mock.DEFAULT,
                     _inner=mock.DEFAULT,
                     _pre_provisioner=mock.DEFAULT,
+                )
+            )
+            stack.enter_context(
+                mock.patch(
+                    f"{runner_gke.__name__}._get_mismatched_node_pools",
+                    return_value=[],
                 )
             )
             job._inner._builder.config.image_id = image_id
@@ -1771,6 +1868,41 @@ class LWSRunnerJobTest(parameterized.TestCase):
                 topology_assignment='[["slice1"]]',
                 expected=runner_gke.LWSRunnerJob.Status.RESCHEDULED,
             ),
+            # Tier promoted to 0, LWS only Progressing (not Available): pending → RESCHEDULED.
+            dict(
+                tier="0",
+                job_version=None,
+                status=dict(conditions=[dict(type="Progressing", status="True")]),
+                spec=_mock_lws_spec(is_spot=True),
+                num_slices=1,
+                metadata={},
+                topology_assignment=None,
+                expected=runner_gke.LWSRunnerJob.Status.RESCHEDULED,
+            ),
+            # Tier promoted to 0, LWS is Available: still RESCHEDULED because current LWS
+            # conditions don't reliably reflect worker state (is_pending hardcoded to True).
+            dict(
+                tier="0",
+                job_version=None,
+                status=dict(conditions=[dict(type="Available", status="True")]),
+                spec=_mock_lws_spec(is_spot=True),
+                num_slices=1,
+                metadata={},
+                topology_assignment=None,
+                expected=runner_gke.LWSRunnerJob.Status.RESCHEDULED,
+            ),
+            # Tier promoted to 0, LWS UpdateInProgress: reschedule happens before conditions
+            # check (is_pending=True hardcoded) → RESCHEDULED.
+            dict(
+                tier="0",
+                job_version=None,
+                status=dict(conditions=[dict(type="UpdateInProgress", status="True")]),
+                spec=_mock_lws_spec(is_spot=True),
+                num_slices=1,
+                metadata={},
+                topology_assignment=None,
+                expected=runner_gke.LWSRunnerJob.Status.RESCHEDULED,
+            ),
         )
     )
     def test_get_status(  # pylint: disable=too-many-positional-arguments
@@ -1985,6 +2117,96 @@ class LWSRunnerJobTest(parameterized.TestCase):
 
         mock_delete.assert_not_called()
 
+    def test_not_started_deletes_wrong_tier_non_running_pool(self):
+        """Tests that NOT_STARTED branch deletes a non-RUNNING wrong-tier pool before create_for."""
+        cfg = self._job_config(
+            command="",
+            name="test-name",
+            cluster="test-cluster",
+            enable_pre_provisioner=True,
+        )
+        job: LWSRunnerJob = cfg.set(status_interval_seconds=0).instantiate(
+            bundler=mock.create_autospec(Bundler)
+        )
+
+        # Pool object returned by _get_mismatched_node_pools with PROVISIONING status.
+        mismatched_pool = {"name": "test-name-pool0", "status": "PROVISIONING"}
+        mock_mismatched = mock.Mock(return_value=[mismatched_pool])
+        mock_delete = mock.Mock()
+
+        with (
+            mock.patch.multiple(
+                job,
+                _get_status=mock.Mock(
+                    side_effect=[
+                        runner_gke.LWSRunnerJob.Status.NOT_STARTED,
+                        runner_gke.LWSRunnerJob.Status.FAILED,
+                    ]
+                ),
+                _inner=mock.DEFAULT,
+                _pre_provisioner=mock.DEFAULT,
+            ),
+            mock.patch(
+                f"{runner_gke.__name__}._get_mismatched_node_pools",
+                mock_mismatched,
+            ),
+            mock.patch(
+                f"{runner_gke.__name__}.delete_node_pools",
+                mock_delete,
+            ),
+            mock.patch.dict("os.environ", {"BASTION_TIER": "0"}),
+        ):
+            job._execute()
+
+        mock_delete.assert_called_once()
+        args, _ = mock_delete.call_args
+        self.assertIn("test-name-pool0", args[0])
+
+    def test_not_started_deletes_running_wrong_tier_pool(self):
+        """Tests that NOT_STARTED branch deletes a RUNNING wrong-tier pool before create_for."""
+        cfg = self._job_config(
+            command="",
+            name="test-name",
+            cluster="test-cluster",
+            enable_pre_provisioner=True,
+        )
+        job: LWSRunnerJob = cfg.set(status_interval_seconds=0).instantiate(
+            bundler=mock.create_autospec(Bundler)
+        )
+
+        # Pool object returned by _get_mismatched_node_pools with RUNNING status.
+        mismatched_pool = {"name": "test-name-pool0", "status": "RUNNING"}
+        mock_mismatched = mock.Mock(return_value=[mismatched_pool])
+        mock_delete = mock.Mock()
+
+        with (
+            mock.patch.multiple(
+                job,
+                _get_status=mock.Mock(
+                    side_effect=[
+                        runner_gke.LWSRunnerJob.Status.NOT_STARTED,
+                        runner_gke.LWSRunnerJob.Status.FAILED,
+                    ]
+                ),
+                _inner=mock.DEFAULT,
+                _pre_provisioner=mock.DEFAULT,
+            ),
+            mock.patch(
+                f"{runner_gke.__name__}._get_mismatched_node_pools",
+                mock_mismatched,
+            ),
+            mock.patch(
+                f"{runner_gke.__name__}.delete_node_pools",
+                mock_delete,
+            ),
+            mock.patch.dict("os.environ", {"BASTION_TIER": "0"}),
+        ):
+            job._execute()
+
+        mock_delete.assert_called_once()
+        args, _ = mock_delete.call_args
+        self.assertIn("test-name-pool0", args[0])
+
     def test_name_alias(self):
         """Tests that names set via flag aliases are retained."""
         with (
@@ -2003,3 +2225,7 @@ class LWSRunnerJobTest(parameterized.TestCase):
             fv.set_default("alias_name", "test-name")
             from_flags(cfg, fv)
             self.assertEqual(cfg.name, fv.alias_name)
+
+
+if __name__ == "__main__":
+    absltest.main()

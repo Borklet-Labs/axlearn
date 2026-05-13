@@ -20,7 +20,7 @@ import psutil
 from absl import app, flags, logging
 
 from axlearn.cloud import DISTRIBUTION_NAME, ROOT_MODULE_NAME
-from axlearn.cloud.common.types import ResourceMap, Topology
+from axlearn.cloud.common.job_types import ResourceMap, Topology
 from axlearn.cloud.gcp.tpu import infer_tpu_cores, infer_tpu_resources
 from axlearn.common.compiler_options import infer_tpu_type, infer_tpu_version
 from axlearn.common.config import REQUIRED, ConfigBase, Configurable, Required, config_class
@@ -109,7 +109,12 @@ def get_package_root(root_module_name: str = ROOT_MODULE_NAME) -> str:
 def get_pyproject_version() -> str:
     """Returns the project version, e.g. X.Y.Z."""
     # TODO(markblee): Fix for nightly
-    return importlib.metadata.version(DISTRIBUTION_NAME)
+    try:
+        return importlib.metadata.version(DISTRIBUTION_NAME)
+    except importlib.metadata.PackageNotFoundError:
+        # Distribution metadata is unavailable when running from a source tree that was not
+        # pip-installed (e.g. Bazel sandbox on RBE). Return a sentinel so callers can proceed.
+        return "0.0.0+unknown"
 
 
 def parse_kv_flags(kv_flags: Sequence[str], *, delimiter: str = ":") -> dict[str, str]:

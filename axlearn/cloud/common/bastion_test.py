@@ -25,8 +25,10 @@ from axlearn.cloud.common.bastion import (
     _BASTION_SERIALIZED_JOBSPEC_ENV_VAR,
     _JOB_DIR,
     _LOG_DIR,
+    _ORPHAN_MISSING_COUNT_THRESHOLD,
     Bastion,
     BastionDirectory,
+    DownloadJobsResult,
     Job,
     JobLifecycleEvent,
     JobLifecycleState,
@@ -49,10 +51,10 @@ from axlearn.cloud.common.bastion import (
     set_runtime_options,
 )
 from axlearn.cloud.common.cleaner import Cleaner
+from axlearn.cloud.common.job_types import JobMetadata, JobSpec, ResourceMap, Topology
 from axlearn.cloud.common.quota import QuotaInfo
 from axlearn.cloud.common.scheduler import BaseScheduler, JobScheduler, JobVerdict
 from axlearn.cloud.common.scheduler_test import mock_quota_config
-from axlearn.cloud.common.types import JobMetadata, JobSpec, ResourceMap, Topology
 from axlearn.cloud.common.uploader import Uploader
 from axlearn.cloud.common.validator import JobValidator
 from axlearn.common.config import config_for_function
@@ -966,6 +968,69 @@ class BastionTest(parameterized.TestCase):
 
             self.assertEqual(2 * len(expected_jobs), mock_bastion._validator._validate_call_count)
 
+    def _make_job(self, name: str, status: JobStatus = JobStatus.ACTIVE) -> Job:
+        return Job(
+            spec=new_jobspec(
+                name=name,
+                command="",
+                metadata=JobMetadata(
+                    user_id="user1",
+                    project_id="project1",
+                    creation_time=datetime(1900, 1, 1, 0, 0, 0, 0),
+                    resources={"test": 8},
+                ),
+            ),
+            state=JobState(status=status),
+            command_proc=None,
+            cleanup_proc=None,
+        )
+
+    def _empty_download_result(self) -> DownloadJobsResult:
+        return DownloadJobsResult(jobs={}, jobs_with_user_states=set(), invalid_jobs={})
+
+    def test_sync_jobs_missing_count_defers_orphan(self):
+        """Jobs absent from remote fewer than threshold times are not removed."""
+        with self._patch_bastion() as mock_bastion:
+            mock_bastion._active_jobs["job1"] = self._make_job("job1")
+
+            with mock.patch.object(
+                bastion, "download_job_batch", return_value=self._empty_download_result()
+            ):
+                for i in range(1, _ORPHAN_MISSING_COUNT_THRESHOLD):
+                    mock_bastion._sync_jobs()
+                    self.assertIn("job1", mock_bastion._active_jobs)
+                    self.assertEqual(mock_bastion._job_missing_counts["job1"], i)
+
+    def test_sync_jobs_missing_count_triggers_orphan_at_threshold(self):
+        """Jobs absent from remote exactly threshold times are removed and counter cleaned up."""
+        with self._patch_bastion() as mock_bastion:
+            mock_bastion._active_jobs["job1"] = self._make_job("job1")
+
+            with mock.patch.object(
+                bastion, "download_job_batch", return_value=self._empty_download_result()
+            ):
+                for _ in range(_ORPHAN_MISSING_COUNT_THRESHOLD):
+                    mock_bastion._sync_jobs()
+
+            self.assertNotIn("job1", mock_bastion._active_jobs)
+            self.assertNotIn("job1", mock_bastion._job_missing_counts)
+
+    def test_sync_jobs_missing_count_resets_on_reappear(self):
+        """Counter resets when a job reappears, preventing premature orphan detection."""
+        with self._patch_bastion() as mock_bastion:
+            job = self._make_job("job1")
+            mock_bastion._active_jobs["job1"] = job
+            mock_bastion._job_missing_counts["job1"] = _ORPHAN_MISSING_COUNT_THRESHOLD - 1
+
+            present_result = DownloadJobsResult(
+                jobs={"job1": job}, jobs_with_user_states=set(), invalid_jobs={}
+            )
+            with mock.patch.object(bastion, "download_job_batch", return_value=present_result):
+                mock_bastion._sync_jobs()
+
+            self.assertIn("job1", mock_bastion._active_jobs)
+            self.assertNotIn("job1", mock_bastion._job_missing_counts)
+
     @parameterized.product(
         [
             dict(
@@ -1696,7 +1761,7 @@ class BastionTest(parameterized.TestCase):
                 ),
             },
         ),
-        # Test case 7: Job with changing topology should go to PENDING
+        # Test case 7: Job with changing topology (same tier) stays ACTIVE for in-place patch
         dict(
             initial_jobs={
                 "job1": Job(
@@ -1725,7 +1790,7 @@ class BastionTest(parameterized.TestCase):
             },
             expected_states={
                 "job1": JobState(
-                    status=JobStatus.PENDING,
+                    status=JobStatus.ACTIVE,
                     metadata={"tier": 0, "topology_assignment": [["subblock-b"]]},
                 ),
             },
@@ -1760,6 +1825,9 @@ class BastionTest(parameterized.TestCase):
             # Mock _append_to_job_history to avoid side effects
             mock_append_to_job_history = mock.Mock()
 
+            # Mock _wait_and_close_proc to avoid process-level side effects
+            mock_wait_and_close_proc = mock.Mock()
+
             # Mock _is_proc_complete to always return False
             patch_is_proc_complete = mock.patch(
                 f"{bastion.__name__}._is_proc_complete", return_value=False
@@ -1771,6 +1839,7 @@ class BastionTest(parameterized.TestCase):
                 mock.patch.object(
                     mock_bastion, "_append_to_job_history", mock_append_to_job_history
                 ),
+                mock.patch.object(mock_bastion, "_wait_and_close_proc", mock_wait_and_close_proc),
                 patch_is_proc_complete,
             ):
                 mock_bastion._update_jobs()

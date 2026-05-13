@@ -113,15 +113,15 @@ except ModuleNotFoundError:
 from axlearn.cloud.common import metrics
 from axlearn.cloud.common.cleaner import Cleaner
 from axlearn.cloud.common.event_queue import BaseQueueClient, Event
-from axlearn.cloud.common.quota import QuotaFn
-from axlearn.cloud.common.scheduler import BaseScheduler, JobScheduler, ResourceMap
-from axlearn.cloud.common.types import (
+from axlearn.cloud.common.job_types import (
     JobMetadata,
     JobSpec,
     JobStateMetadata,
     ResourceType,
     Topology,
 )
+from axlearn.cloud.common.quota import QuotaFn
+from axlearn.cloud.common.scheduler import BaseScheduler, JobScheduler, ResourceMap
 from axlearn.cloud.common.uploader import Uploader
 from axlearn.cloud.common.utils import merge, send_signal
 from axlearn.cloud.common.validator import JobValidator
@@ -142,6 +142,9 @@ _LATEST_BASTION_VERSION = 1  # Determines job schema (see JobSpec).
 _LOG_DIR = "/var/tmp/logs"  # Use /var/tmp/ since /tmp/ is cleared every 10 days.
 _JOB_DIR = "/var/tmp/jobs"
 _BASTION_SERIALIZED_JOBSPEC_ENV_VAR = "_BASTION_SERIALIZED_JOBSPEC"
+# Number of consecutive sync cycles a job must be absent from the remote before being treated
+# as orphaned. Provides tolerance for transient download failures.
+_ORPHAN_MISSING_COUNT_THRESHOLD = 10
 BASTION_JOB_VERSION_ENV_VAR = "BASTION_JOB_VERSION"
 BASTION_JOB_TOPOLOGY_ASSIGNMENT_ENV_VAR = "BASTION_JOB_TOPOLOGY_ASSIGNMENT"
 
@@ -878,6 +881,9 @@ class Bastion(Configurable):
         # Local active jobs (and respective commands, files, etc).
         # TODO(markblee): Rename this, as it includes more than just ACTIVE jobs (e.g. PENDING).
         self._active_jobs: dict[str, Job] = {}
+        # Tracks consecutive sync cycles where a job is absent from the remote active dir.
+        # Used to distinguish transient download failures from genuinely orphaned jobs.
+        self._job_missing_counts: dict[str, int] = {}
         # A set of job names which require cleanup of user states.
         self._jobs_with_user_states: set[str] = set()
         # Runtime options.
@@ -1124,11 +1130,34 @@ class Bastion(Configurable):
             # Detected removed job: exists locally, but not in remote.
             elif job_name not in active_jobs:
                 job = self._active_jobs[job_name]
-                if job.state.status != JobStatus.COMPLETED:
-                    logging.warning("Detected orphaned job %s! Killing it...", job.spec.name)
-                self._remove_local_job(job)
+                # COMPLETED jobs are cleaned up
+                # immediately rather than waiting for the orphan threshold.
+                if job.state.status == JobStatus.COMPLETED:
+                    self._job_missing_counts.pop(job_name, None)
+                    self._remove_local_job(job)
+                else:
+                    # Before claiming a job as orphaned, consecutively check the number of
+                    # times a job has been missed from remote active dir. When exceeding a
+                    # threshold, mark the job as orphaned to avoid fail-fast on transient errors.
+                    self._job_missing_counts[job_name] = (
+                        self._job_missing_counts.get(job_name, 0) + 1
+                    )
+                    missing_count = self._job_missing_counts[job_name]
+                    logging.warning(
+                        "Job %s absent from remote (%d/%d consecutive); "
+                        "deferring orphan check (may be a transient error).",
+                        job_name,
+                        missing_count,
+                        _ORPHAN_MISSING_COUNT_THRESHOLD,
+                    )
+                    if missing_count >= _ORPHAN_MISSING_COUNT_THRESHOLD:
+                        logging.warning("Detected orphaned job %s! Killing it...", job.spec.name)
+                        self._remove_local_job(job)
+                        self._job_missing_counts.pop(job_name, None)
             # Detected updated job: exists in both.
             else:
+                # Reset the job miss counters
+                self._job_missing_counts.pop(job_name, None)
                 curr_job = self._active_jobs[job_name]
                 if job_name in jobs_with_failed_validation:
                     if curr_job.state.status in {
@@ -1396,6 +1425,28 @@ class Bastion(Configurable):
                 ):
                     # Resume if not running, or keep running if scheduling tier did not change.
                     job.state.status = JobStatus.ACTIVE
+                elif changed_topology and not changed_tiers:
+                    # Topology changed but tier is the same. We must restart the runner
+                    # because topology_assignment is read from BASTION_JOB_TOPOLOGY_ASSIGNMENT
+                    # env var at process startup (during config construction) and cannot be
+                    # updated in a running process. The new runner detects the mismatch and
+                    # patches the JobSet annotation in-place.
+                    self._append_to_job_history(
+                        job,
+                        msg=f"Topology changed from {old_topology} to {new_topology}. "
+                        "Restarting runner for in-place patch.",
+                        state=JobLifecycleState.RESCHEDULING,
+                    )
+                    logging.info(
+                        "Topology changed for %s (no tier change). "
+                        "Restarting runner to patch in-place.",
+                        job.spec.name,
+                    )
+                    if job.command_proc is not None:
+                        self._wait_and_close_proc(job.command_proc, kill=True)
+                        job.command_proc = None
+                        logging.info("Runner stopped for %s.", job.spec.name)
+                    job.state.status = JobStatus.ACTIVE
                 else:
                     # Job changed scheduling tiers, and must be restarted on the new tier.
                     # NOTE: this can possibly lead to thrashing of jobs that frequently switch
@@ -1403,20 +1454,18 @@ class Bastion(Configurable):
                     # low priority to high priority if it was demoted recently.
                     # TODO(markblee): Add instrumentation to track frequency of tier changes to
                     # see whether this is necessary.
-                    assert job.state.status == JobStatus.ACTIVE and (
-                        changed_tiers or changed_topology
-                    )
-                    reason = []
-                    if changed_tiers:
-                        reason.append(f"tier from {old_tier} to {new_tier}")
-                    if changed_topology:
-                        reason.append(f"topology from {old_topology} to {new_topology}")
+                    assert job.state.status == JobStatus.ACTIVE and changed_tiers
                     self._append_to_job_history(
                         job,
-                        msg=f"Rescheduling due to changed {" and ".join(reason)}",
+                        msg=f"Rescheduling due to changed tier from {old_tier} to {new_tier}",
                         state=JobLifecycleState.RESCHEDULING,
                     )
-                    logging.info("Rescheduling %s due to %s", job.spec.name, reason)
+                    logging.info(
+                        "Rescheduling %s due to tier change from %s to %s",
+                        job.spec.name,
+                        old_tier,
+                        new_tier,
+                    )
                     job.state.status = JobStatus.PENDING
             else:
                 # Pre-empt/stay queued.

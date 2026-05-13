@@ -59,3 +59,13 @@ class TestInitContext(TestCase):
         with mock.patch("importlib.import_module", side_effect=side_effect):
             with _init_context(fv):
                 self.assertEqual(list(expect.values()), actual_specs)
+
+
+if __name__ == "__main__":
+    import sys
+
+    import pytest
+
+    # pytest.main is required here: importing axlearn.common.launch registers absl flags with
+    # None defaults. absltest.main() triggers flag parsing which rejects None values.
+    sys.exit(pytest.main([__file__]))

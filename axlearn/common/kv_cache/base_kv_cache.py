@@ -8,7 +8,8 @@ import jax.numpy as jnp
 
 from axlearn.common.base_layer import BaseLayer
 from axlearn.common.config import config_class
-from axlearn.common.utils import Nested, Tensor
+from axlearn.common.module import nowrap
+from axlearn.common.utils import Nested, PartitionSpecType, Tensor
 
 
 class KVState(NamedTuple):
@@ -39,6 +40,8 @@ class BaseKVCache(BaseLayer):
         # the returned KV activations. Therefore, before computing attention, we need to cast
         # the KV tensors to match the query's dtype.
         cache_dtype: Optional[jnp.dtype] = None
+        # Partition spec in BTNH layout [batch, seq_len, num_kv_heads, head_dim].
+        kv_partition_spec: Optional[PartitionSpecType] = None
 
     class Output(KVState):
         pass
@@ -64,6 +67,7 @@ class BaseKVCache(BaseLayer):
         assert dtype is not None
         return dtype
 
+    @nowrap
     def init_states(self, shape: Shape, *, dtype: jnp.dtype) -> Nested[Tensor]:
         """Initializes KV cache.
 
@@ -83,7 +87,7 @@ class BaseKVCache(BaseLayer):
         k_proj: Tensor,
         v_proj: Tensor,
         key_positions: Tensor,
-        unpadded_len: Optional[Tensor] = None,
+        segment_ids: Optional[Tensor] = None,
         page_pool: Optional[Nested[Tensor]] = None,
     ) -> tuple[Nested[Tensor], Output]:
         """Updates the KV cache per extend step.
@@ -97,9 +101,8 @@ class BaseKVCache(BaseLayer):
             k_proj: A Tensor of shape [batch, step_length, num_kv_heads, per_head_dim].
             v_proj: A Tensor of shape [batch, step_length, num_kv_heads, per_head_dim].
             key_positions: An optional Tensor of shape [1|batch, step_length].
-            unpadded_len: An optional Tensor of shape [batch]. Specifies the number of
-                non-padding tokens per sequence. When provided, only the first `unpadded_len[i]`
-                tokens of sequence `i` are considered valid for caching. The actual behavior
+            segment_ids: An optional Tensor of shape [batch, step_length]. `segment_ids == 0`
+                represents padding tokens that should not be cached. The actual behavior
                 depends on the specific KV cache implementation.
             page_pool: See file-level docstring of `attention.py`.
 
@@ -112,11 +115,10 @@ class BaseKVCache(BaseLayer):
         raise NotImplementedError(type(self))
 
     @classmethod
-    def maybe_normalize_kv(cls, kv_state: KVState) -> tuple[Tensor, Tensor]:
-        """Normalize the KV shape if they're not already normalized.
+    def as_dense_kv(cls, kv_state: KVState) -> tuple[Tensor, Tensor]:
+        """Return a dense `(k_proj, v_proj)` pair from a dense `KVState`.
 
-        Returns:
-            A tuple of [k_proj, v_proj], each with shape [batch_size, seq_len, kv_heads, head_dim].
+        Subclasses that emit paged or otherwise non-dense storage override this
+        to materialise `(k, v)` on demand.
         """
-        assert kv_state.page_indices is None
         return kv_state.k_proj, kv_state.v_proj

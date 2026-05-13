@@ -2,6 +2,7 @@
 
 """Tests autoregressive models."""
 
+
 from functools import partial
 from typing import cast
 
@@ -11,7 +12,6 @@ import numpy as np
 from absl.testing import absltest, parameterized
 from jax import numpy as jnp
 from jax.experimental.pjit import pjit
-from transformers.models.gpt2 import modeling_gpt2 as hf_gpt2
 
 from axlearn.common import causal_lm
 from axlearn.common.attention import (
@@ -22,10 +22,11 @@ from axlearn.common.attention import (
     TransformerFeedForwardLayer,
 )
 from axlearn.common.config import config_for_function
+from axlearn.common.golden import load_golden
 from axlearn.common.learner import Learner
 from axlearn.common.loss import cross_entropy
 from axlearn.common.loss_metrics import BaseLossMetrics
-from axlearn.common.metrics import MetricAccumulator, MetricSummary, WeightedSummary
+from axlearn.common.metrics import MetricSummary, WeightedSummary
 from axlearn.common.module import (
     InvocationContext,
     OutputCollection,
@@ -36,10 +37,8 @@ from axlearn.common.module import (
 )
 from axlearn.common.optimizer_base import OptParam
 from axlearn.common.optimizers import sgd_optimizer
-from axlearn.common.param_converter import as_torch_tensor
 from axlearn.common.param_init import PARAM_REGEXP_WEIGHT, DefaultInitializer, WeightInitializer
 from axlearn.common.test_utils import TestCase, assert_allclose
-from axlearn.common.torch_utils import parameters_from_torch_layer
 from axlearn.common.update_transformation import (  # pytype: disable=pyi-error
     ForwardBackwardOutputs,
     ForwardOutputs,
@@ -48,28 +47,13 @@ from axlearn.common.utils import Tensor
 
 
 class Gpt2TransformerTest(TestCase):
-    @parameterized.parameters("attention_mask", "causal_attention")
-    def test_against_hf_gpt2_lm(self, causal_attention_mode: str):
+    def test_against_hf_gpt2_lm(self):
         hidden_dim = 16
         vocab_size = 24
         num_heads = 4
         num_layers = 2
         source_length = 11
-        # Reference implementation.
-        ref_cfg = hf_gpt2.GPT2Config(
-            n_embd=hidden_dim,
-            n_head=num_heads,
-            n_layer=num_layers,
-            n_positions=source_length,
-            vocab_size=vocab_size,
-            attn_pdrop=0.0,
-            embd_pdrop=0.0,
-            resid_pdrop=0.0,
-        )
-        ref_layer = hf_gpt2.GPT2LMHeadModel(ref_cfg).eval()
-        # Equivalent AXLearn implementation.
-        # The config has similarities with some in encoder_test.py.
-        # pylint: disable=duplicate-code
+
         decoder_cfg = causal_lm.gpt_decoder_config(
             stack_cfg=StackedTransformerLayer.default_config(),
             num_layers=num_layers,
@@ -78,20 +62,11 @@ class Gpt2TransformerTest(TestCase):
             vocab_size=vocab_size,
             activation_function="nn.gelu",
             max_position_embeddings=source_length,
-            layer_norm_epsilon=ref_cfg.layer_norm_epsilon,
-            dropout_rate=ref_cfg.attn_pdrop,
+            layer_norm_epsilon=1e-5,
+            dropout_rate=0.0,
         )
-        if causal_attention_mode == "attention_mask":
-            decoder_cfg.transformer.layer.self_attention.attention.causal = None
-            decoder_cfg.attention_mask = CausalAttentionLogitBiasLayer.default_config()
-            require_same_tree_structure = True
-        elif causal_attention_mode == "causal_attention":
-            decoder_cfg.transformer.layer.self_attention.attention.causal = True
-            decoder_cfg.attention_mask = None
-            require_same_tree_structure = False
-        else:
-            raise ValueError(f"Unknown causal_attention_mode: {causal_attention_mode}")
-
+        decoder_cfg.transformer.layer.self_attention.attention.causal = True
+        decoder_cfg.attention_mask = None
         decoder_cfg.param_init = DefaultInitializer.default_config().set(
             init_by_param_name={
                 PARAM_REGEXP_WEIGHT: WeightInitializer.default_config().set(
@@ -107,18 +82,19 @@ class Gpt2TransformerTest(TestCase):
             )
             .instantiate(parent=None)
         )
-        input_ids = np.random.randint(1, vocab_size, size=(3, source_length))
-        (_, test_aux), ref_outputs = self._compute_layer_outputs(
-            test_layer=layer,
-            ref_layer=ref_layer,
-            test_inputs=dict(input_batch=dict(input_ids=input_ids), return_aux=True),
-            ref_inputs=as_torch_tensor(input_ids),
-            parameters_from_ref_layer=parameters_from_torch_layer,
-            require_same_tree_structure=require_same_tree_structure,
-        )
-        test_logits = test_aux["logits"]
-        ref_logits = ref_outputs.logits.detach().numpy()
-        assert_allclose(test_logits, ref_logits)
+
+        golden = load_golden("axlearn.common.causal_lm_test", "test_against_hf_gpt2_lm")
+
+        input_ids = golden["inputs"]["input_ids"]
+        test_logits = functional(
+            layer,
+            prng_key=jax.random.PRNGKey(123),
+            state=golden["params"],
+            inputs=dict(input_batch=dict(input_ids=input_ids)),
+            is_training=False,
+            method="extract_logits",
+        )[0]
+        assert_allclose(test_logits, golden["outputs"]["logits"])
 
 
 class ModelTest(TestCase):
@@ -137,81 +113,86 @@ class ModelTest(TestCase):
         return causal_lm.Model.default_config().set(decoder=decoder_cfg)
 
     def test_metrics(self):
+        vocab_size, seq_len = 10, 6
         model = (
-            self._model_config(vocab_size=10, seq_len=10)
+            self._model_config(vocab_size=vocab_size, seq_len=seq_len)
             .set(name="metrics_test")
             .instantiate(parent=None)
         )
 
         prng_key, init_key = jax.random.split(jax.random.PRNGKey(123))
         model_params = model.initialize_parameters_recursively(init_key)
-        # Compute summaries after forwarding two batches.
-        # The second batch is a dummy one - should not affect metrics.
-        target_labels = jnp.array([[[1, 3, 0], [2, 3, 1]], [[0, 0, 0], [0, 0, 0]]])
-        logits = jnp.array(
-            [
-                [
-                    [
-                        [0.1, 0.9, 0.1, 0.1],  # Target 1; pred 1.
-                        [0.1, 0.1, 0.9, 0.1],  # Target 3; pred 2.
-                        [0.9, 0.1, 0.1, 0.1],  # Target 0; pred 0.
-                    ],  # Example 0.
-                    [
-                        [0.1, 0.1, 0.9, 0.1],  # Target 2; pred 2.
-                        [0.1, 0.1, 0.9, 0.1],  # Target 3; pred 2.
-                        [0.9, 0.1, 0.1, 0.1],  # Target 1; pred 0.
-                    ],  # Example 1.
-                ],  # Batch 0.
-                [
-                    [
-                        [0.1, 0.9, 0.1, 0.1],  # Target 0; pred 1.
-                        [0.1, 0.1, 0.9, 0.1],  # Target 0; pred 2.
-                        [0.9, 0.1, 0.1, 0.1],  # Target 0; pred 0.
-                    ],  # Example 0.
-                    [
-                        [0.1, 0.1, 0.9, 0.1],  # Target 0; pred 2.
-                        [0.1, 0.1, 0.9, 0.1],  # Target 0; pred 2.
-                        [0.9, 0.1, 0.1, 0.1],  # Target 0; pred 0.
-                    ],  # Example 1.
-                ],  # Batch 1.
-            ]
+
+        # Two batches: the second is all-padding and should not affect metrics.
+        input_ids = jnp.array([[1, 3, 5, 2, 7, 4], [1, 2, 3, 4, 5, 6]])
+        target_labels = jnp.array([[1, 3, 0, 2, 3, 1], [0, 0, 0, 0, 0, 0]])
+        target_num_bytes = jnp.array([7, 0])
+        input_batch = dict(
+            input_ids=input_ids,
+            target_labels=target_labels,
+            target_num_bytes=target_num_bytes,
         )
-        target_num_bytes = jnp.array([[3, 7], [0, 0]])
-        live_targets = jnp.array([[[1, 1, 0], [1, 1, 1]], [[0, 0, 0], [0, 0, 0]]])
-        accumulator = MetricAccumulator.default_config().instantiate()
-        for i in range(2):
-            _, output_collection = functional(
-                model,
-                inputs=dict(
-                    input_batch=dict(
-                        target_labels=target_labels[i],
-                        target_num_bytes=target_num_bytes[i],
-                    ),
-                    predict_outputs=dict(
-                        logits=logits[i],
-                    ),
-                ),
-                is_training=True,
-                prng_key=prng_key,
-                state=model_params,
-                method="_metrics",
-            )
-            accumulator.update(output_collection.summaries)
-        summaries = accumulator.summaries()
-        # Only the first batch should affect results.
-        loss, loss_dict = cross_entropy(
-            logits=logits[0],
-            target_labels=target_labels[0],
-            live_targets=live_targets[0],
+
+        # Run _metrics via the model's forward path.
+        predict_outputs, _ = functional(
+            model,
+            inputs=dict(input_batch=input_batch),
+            is_training=True,
+            prng_key=prng_key,
+            state=model_params,
+            method="predict",
         )
-        self.assertEqual(2.0 / 5, summaries["accuracy"].mean)
-        self.assertAlmostEqual(loss, summaries["loss"].mean)
-        self.assertEqual(5, summaries["loss"].weight)
-        self.assertAlmostEqual(jnp.exp(loss), summaries["perplexity"].mean, places=6)
-        per_token_loss = loss_dict["per_target_loss"] * live_targets
+        (loss, metrics), output_collection = functional(
+            model,
+            inputs=dict(input_batch=input_batch, predict_outputs=predict_outputs),
+            is_training=True,
+            prng_key=prng_key,
+            state=model_params,
+            method="_metrics",
+            drop_output_collections=(),
+        )
+
+        # Independently compute expected values via extract_logits + cross_entropy.
+        logits, _ = functional(
+            model,
+            inputs=dict(input_batch=input_batch),
+            is_training=True,
+            prng_key=prng_key,
+            state=model_params,
+            method="extract_logits",
+        )
+        # _metrics maps pad_token_id targets to -1.
+        adj_labels = jnp.where(
+            target_labels == model.config.decoder.pad_token_id, -1, target_labels
+        )
+        live_targets = (adj_labels >= 0).astype(jnp.float32)
+        num_targets = live_targets.sum()
+        expected_loss, expected_loss_dict = cross_entropy(
+            logits=logits,
+            target_labels=adj_labels,
+            live_targets=live_targets,
+        )
+
+        # Verify numerical values match.
+        summaries = output_collection.summaries
+        self.assertAlmostEqual(float(loss), float(expected_loss), places=5)
+        self.assertAlmostEqual(float(expected_loss), float(summaries["loss"].mean), places=5)
+        self.assertEqual(float(num_targets), summaries["loss"].weight)
+        self.assertAlmostEqual(
+            float(jnp.exp(expected_loss)), float(summaries["perplexity"].mean), places=5
+        )
+        expected_accuracy = expected_loss_dict["accuracy"]
+        self.assertAlmostEqual(
+            float(expected_accuracy), float(summaries["accuracy"].mean), places=5
+        )
+        per_token_loss = expected_loss_dict["per_target_loss"] * live_targets
         total_bytes = target_num_bytes.sum()
         bits_per_byte = per_token_loss.sum() / jnp.maximum(1, total_bytes) / jnp.log(2)
-        self.assertAlmostEqual(bits_per_byte, summaries["bits_per_byte"].mean)
+        self.assertAlmostEqual(float(bits_per_byte), float(summaries["bits_per_byte"].mean))
+
+        # Verify per-token metrics shapes.
+        self.assertEqual(metrics["per_token_loss"].shape, target_labels.shape)
+        self.assertEqual(metrics["live_targets"].shape, target_labels.shape)
 
     def test_metric_summary_to_scalar(self):
         """Test that _metrics converts all MetricSummary types to scalars."""
@@ -363,11 +344,16 @@ class ModelTest(TestCase):
             **common_kwargs,
             inputs=dict(input_batch=input_batch, return_aux=True),
         )
+        predict_outputs, _ = functional(
+            **common_kwargs,
+            inputs=dict(input_batch=input_batch),
+            method="predict",
+        )
         (ref_loss, metrics), _ = functional(
             **common_kwargs,
             inputs=dict(
                 input_batch=dict(target_labels=target_labels),
-                predict_outputs=dict(logits=aux["logits"]),
+                predict_outputs=predict_outputs,
             ),
             method="_metrics",
         )
@@ -403,14 +389,31 @@ class ModelTest(TestCase):
             model_cfg.metrics = metrics_cfg
             model = model_cfg.set(name="test").instantiate(parent=None)
             init_key, forward_key, target_key = jax.random.split(jax.random.PRNGKey(0), num=3)
+            state = model.initialize_parameters_recursively(init_key)
             target_labels = jax.random.randint(
                 target_key, shape=[batch_size, seq_len], minval=-1, maxval=vocab_size
+            )
+            input_batch = dict(
+                input_ids=jax.random.randint(
+                    jax.random.PRNGKey(4), shape=[batch_size, seq_len], minval=0, maxval=vocab_size
+                ),
+                target_labels=target_labels,
+            )
+            predict_outputs, _ = functional(
+                module=model,
+                prng_key=forward_key,
+                state=state,
+                inputs=dict(input_batch=input_batch),
+                method="predict",
+                is_training=True,
             )
             return functional(
                 module=model,
                 prng_key=forward_key,
-                state=model.initialize_parameters_recursively(init_key),
-                inputs=dict(input_batch=dict(target_labels=target_labels), predict_outputs={}),
+                state=state,
+                inputs=dict(
+                    input_batch=dict(target_labels=target_labels), predict_outputs=predict_outputs
+                ),
                 method="_metrics",
                 is_training=True,
                 drop_output_collections=(),
@@ -752,6 +755,11 @@ class ModelAuxLossTest(TestCase):
             inputs=dict(input_batch=input_batch, return_aux=True),
             drop_output_collections=(),
         )
+        predict_outputs, _ = functional(
+            **common_kwargs,
+            inputs=dict(input_batch=input_batch),
+            method="predict",
+        )
         oc = new_output_collection()
         oc.module_outputs.update(output_collection.module_outputs)
         metrics_fn = InvocationContext(
@@ -761,7 +769,7 @@ class ModelAuxLossTest(TestCase):
         )
         (ref_loss, metrics), _ = metrics_fn(
             input_batch=dict(target_labels=target_labels),
-            predict_outputs=dict(logits=aux["logits"]),
+            predict_outputs=predict_outputs,
         )
         self.assertAlmostEqual(loss, ref_loss)
         self.assertNestedAllClose(aux["metrics"], metrics)

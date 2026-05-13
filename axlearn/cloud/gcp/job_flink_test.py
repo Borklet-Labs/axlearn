@@ -7,7 +7,7 @@ import logging
 from typing import Optional
 
 from absl import flags
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
 
 from axlearn.cloud.common.bundler import Bundler
 from axlearn.cloud.common.utils import define_flags, from_flags
@@ -43,7 +43,7 @@ expected_flink_deployment_json = """
               "-c"
             ],
             "args": [
-              "while true; do gsutil -m rsync -r /opt/flink/log fake-output-dir/output/$HOSTNAME/; sleep 60; done"
+              "trap 'gsutil -m rsync -r /opt/flink/log fake-output-dir/output/$HOSTNAME/; exit 0' TERM; while true; do gsutil -m rsync -r /opt/flink/log fake-output-dir/output/$HOSTNAME/; sleep 60 & wait $!; done"
             ],
             "resources": {
               "requests": {
@@ -149,7 +149,7 @@ expected_flink_deployment_json = """
                 "-c"
               ],
               "args": [
-                "while true; do gsutil -m rsync -r /opt/flink/log fake-output-dir/output/$HOSTNAME/; sleep 60; done"
+                "trap 'gsutil -m rsync -r /opt/flink/log fake-output-dir/output/$HOSTNAME/; exit 0' TERM; while true; do gsutil -m rsync -r /opt/flink/log fake-output-dir/output/$HOSTNAME/; sleep 60 & wait $!; done"
               ],
               "resources": {
                 "requests": {
@@ -336,7 +336,7 @@ expected_jobsubmission_json = """
               "-c"
             ],
             "args": [
-              "while true; do gsutil -m rsync -r /output fake-output-dir/output/$HOSTNAME/; sleep 60; done"
+              "trap 'gsutil -m rsync -r /output fake-output-dir/output/$HOSTNAME/; exit 0' TERM; while true; do gsutil -m rsync -r /output fake-output-dir/output/$HOSTNAME/; sleep 60 & wait $!; done"
             ],
             "resources": {
               "requests": {
@@ -552,3 +552,7 @@ class FlinkTPUGKEJobTest(TestCase):
             )
             logging.warning(json.dumps(job_submission, indent=2))
             raise
+
+
+if __name__ == "__main__":
+    absltest.main()

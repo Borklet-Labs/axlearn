@@ -19,6 +19,7 @@ from axlearn.cloud.common.bastion import (
 )
 from axlearn.cloud.common.bundler import Bundler
 from axlearn.cloud.common.utils import parse_kv_flags
+from axlearn.cloud.gcp.config import gcp_settings
 from axlearn.cloud.gcp.jobset_utils import (
     _ANNOTATION_NODE_SERVICE_ACCOUNT,
     _METADATA_GOOGLE_INTERNAL_IP,
@@ -29,6 +30,7 @@ from axlearn.cloud.gcp.jobset_utils import (
     TPUReplicatedJob,
     _LoadBalancer,
 )
+from axlearn.cloud.gcp.k8s_readiness_probe import ReadinessProbe, StartupProbe
 from axlearn.cloud.gcp.lws_utils import BaseLeaderWorkerTemplate, TPULeaderWorkerTemplate
 from axlearn.cloud.gcp.system_characteristics import (
     GCE_MACHINE_TYPE_TO_MEMORY_CHARACTERISTICS,
@@ -100,6 +102,11 @@ _PATHWAYS_BACK_OFF_LIMIT = 32
 
 _PATHWAYS_SHM_DIR = "/tmp/ifrt_proxy"
 _PATHWAYS_SHM_VOLUME_NAME = "shared-memory"
+
+# Default health check endpoint used when enable_health_probes is set but no explicit
+# port/path is configured.
+_DEFAULT_HEALTH_CHECK_PORT = 8080
+_DEFAULT_HEALTH_CHECK_PATH = "/v1/health"
 
 # Notary proxy configuration for gke_gateway_route
 NOTARY_PROXY_IMAGE = "REDACTED_INTERNAL_REGISTRY/polymer/notary-proxy:884a9a5f23ea"
@@ -183,6 +190,19 @@ def get_xla_options(
     return {k: v for k, v in xla_options.items() if k.startswith("xla_")}
 
 
+def _pathways_staging_dir(output_dir: str, *, shared: bool = False) -> str:
+    """Returns the GCS staging directory for Pathways.
+
+    Args:
+        output_dir: The job output directory, used as fallback when shared is False.
+        shared: If True, uses ttl_bucket from gcp settings for cache reuse across jobs.
+    """
+    if shared:
+        ttl_bucket = gcp_settings("ttl_bucket", required=True)
+        return f"gs://{ttl_bucket}/pathways-staging"
+    return f"{output_dir}/pathways-staging"
+
+
 def round_up_to_power_of_2(n):
     """
     Rounds an integer up to the nearest power of 2.
@@ -213,10 +233,13 @@ class PathwaysColocatedPythonPlugin(FlagConfigurable):
         Attributes:
             pathways_proxy_image: The Pathways proxy image.
             pathways_server_image: The Pathways server image.
+            pathways_disable_shared_cache: If True, use per-job output directory for
+                pathways staging instead of the shared bucket root.
         """
 
         pathways_proxy_image: Optional[str] = None
         pathways_server_image: Optional[str] = None
+        pathways_disable_shared_cache: Optional[bool] = None
 
     @classmethod
     def define_flags(cls, fv):
@@ -232,6 +255,13 @@ class PathwaysColocatedPythonPlugin(FlagConfigurable):
             "pathways_server_image",
             None,
             "Allows a custom Pathways server image to be provided.",
+            **common_kwargs,
+        )
+        flags.DEFINE_boolean(
+            "pathways_disable_shared_cache",
+            None,
+            "If True, use the per-job output directory for pathways staging instead of "
+            "the shared bucket root.",
             **common_kwargs,
         )
 
@@ -309,11 +339,15 @@ def _build_base_pathways_worker_container(
     container = base_container_builder._build_container()
 
     worker_container = copy.deepcopy(container)
+    gcs_scratch_location = _pathways_staging_dir(
+        base_container_builder.config.output_dir,
+        shared=colocated_python_plugin.config.pathways_disable_shared_cache is not True,
+    )
     args = [
         f"--server_port={_PATHWAYS_WORKER_PORT}",
         f"--resource_manager_address={resource_manager_address}:"
         + f"{_PATHWAYS_RESOURCE_MANAGER_PORT}",
-        f"--gcs_scratch_location={base_container_builder.config.output_dir}/pathways-staging",
+        f"--gcs_scratch_location={gcs_scratch_location}",
         # Recycling host memory gives a slight increase in performance.
         "--tpu_pinned_host_allocation_recycle=true",
     ]
@@ -554,7 +588,10 @@ class PathwaysReplicatedJob(BaseReplicatedJob):
         cfg: TPUReplicatedJob.Config = self._inner.config
 
         system = USER_FACING_NAME_TO_SYSTEM_CHARACTERISTICS[self._tpu_type]
-        staging_location = f"{cfg.output_dir}/pathways-staging"
+        gcs_scratch_location = _pathways_staging_dir(
+            cfg.output_dir,
+            shared=self._colocated_python.config.pathways_disable_shared_cache is not True,
+        )
         pathways_tpu_version = get_pathways_tpu_version(system.gce_machine_type)
 
         # If multi-head, every pathways-head will only
@@ -564,7 +601,6 @@ class PathwaysReplicatedJob(BaseReplicatedJob):
         cmd_args = [
             f"--resource_manager_address=localhost:{_PATHWAYS_RESOURCE_MANAGER_PORT}",
             f"--server_port={_PATHWAYS_PROXY_PORT}",
-            f"--gcs_scratch_location={staging_location}",
         ]
         if self._colocated_python.is_colocated_python_enabled:
             cmd_args.append("--sidecar_name=external")
@@ -614,7 +650,7 @@ class PathwaysReplicatedJob(BaseReplicatedJob):
                     "--node_type=resource_manager",
                     f"--instance_count={pathways_instance_count}",
                     f"--instance_type={instance_type}",
-                    f"--gcs_scratch_location={staging_location}",
+                    f"--gcs_scratch_location={gcs_scratch_location}",
                 ],
                 volumeMounts=[dict(name="shared-output", mountPath="/output")],
             ),
@@ -1100,13 +1136,13 @@ class PathwaysLeaderWorkerTemplate(BaseLeaderWorkerTemplate):
         )
         flags.DEFINE_string(
             "health_check_path",
-            "/v1/health",
+            _DEFAULT_HEALTH_CHECK_PATH,
             "Path for health check endpoint used by startup and readiness probes.",
             **common_kwargs,
         )
         flags.DEFINE_integer(
             "health_check_port",
-            8080,
+            _DEFAULT_HEALTH_CHECK_PORT,
             "Port for health check endpoint used by startup and readiness probes.",
             **common_kwargs,
         )
@@ -1144,6 +1180,42 @@ class PathwaysLeaderWorkerTemplate(BaseLeaderWorkerTemplate):
         self._tpu_type = infer_tpu_type(cfg.inner.accelerator.instance_type)
         if self._tpu_type not in USER_FACING_NAME_TO_SYSTEM_CHARACTERISTICS:
             raise NotImplementedError(f"Missing system characteristics for {self._tpu_type}")
+
+        # If health probes are enabled, initialize startup and readiness probes on the inner
+        # builder using the configured health check settings, unless they are already configured.
+        logging.info("Enabled health probes %s", cfg.enable_health_probes)
+        if cfg.enable_health_probes:
+            if not self._inner.startup_probe.is_configured():
+                logging.info("Configuring startup probe")
+                # Default startup probe failure threshold: 360 failures × 10s period = 1 hour max
+                # startup time. cfg.startup_probe_failure_threshold may be None due to a flag name
+                # collision with StartupProbe's own startup_probe_failure_threshold flag.
+                startup_failure_threshold = cfg.startup_probe_failure_threshold or 360
+                self._inner.startup_probe = (
+                    StartupProbe.default_config()
+                    .set(
+                        http_port=cfg.health_check_port or _DEFAULT_HEALTH_CHECK_PORT,
+                        http_path=cfg.health_check_path or _DEFAULT_HEALTH_CHECK_PATH,
+                        initial_delay_seconds=30,
+                        period_seconds=10,
+                        timeout_seconds=5,
+                        failure_threshold=startup_failure_threshold,
+                    )
+                    .instantiate()
+                )
+            if not self._inner.readiness_probe.is_configured():
+                logging.info("Configuring readiness probe")
+                self._inner.readiness_probe = (
+                    ReadinessProbe.default_config()
+                    .set(
+                        http_port=cfg.health_check_port or _DEFAULT_HEALTH_CHECK_PORT,
+                        http_path=cfg.health_check_path or _DEFAULT_HEALTH_CHECK_PATH,
+                        period_seconds=10,
+                        timeout_seconds=5,
+                        failure_threshold=3,
+                    )
+                    .instantiate()
+                )
 
         self._colocated_python = cfg.colocated_python.instantiate(bundler=bundler)
 
@@ -1194,12 +1266,9 @@ class PathwaysLeaderWorkerTemplate(BaseLeaderWorkerTemplate):
         return worker_pod
 
     def _build_pathways_proxy_container(self) -> dict:
-        cfg: TPULeaderWorkerTemplate.Config = self._inner.config
-        staging_location = f"{cfg.output_dir}/pathways-staging"
         cmd_args = [
             f"--resource_manager_address=localhost:{_PATHWAYS_RESOURCE_MANAGER_PORT}",
             f"--server_port={_PATHWAYS_PROXY_PORT}",
-            f"--gcs_scratch_location={staging_location}",
         ]
         if self._colocated_python.is_colocated_python_enabled:
             cmd_args.append("--sidecar_name=external")
@@ -1214,7 +1283,10 @@ class PathwaysLeaderWorkerTemplate(BaseLeaderWorkerTemplate):
 
     def _build_pathways_rm_container(self) -> dict:
         cfg: TPULeaderWorkerTemplate.Config = self._inner.config
-        staging_location = f"{cfg.output_dir}/pathways-staging"
+        gcs_scratch_location = _pathways_staging_dir(
+            cfg.output_dir,
+            shared=self._colocated_python.config.pathways_disable_shared_cache is not True,
+        )
 
         system = USER_FACING_NAME_TO_SYSTEM_CHARACTERISTICS[self._tpu_type]
         pathways_tpu_version = get_pathways_tpu_version(system.gce_machine_type)
@@ -1237,7 +1309,7 @@ class PathwaysLeaderWorkerTemplate(BaseLeaderWorkerTemplate):
                 "--node_type=resource_manager",
                 "--instance_count=1",
                 f"--instance_type={pathways_tpu_version}:{system.topology}",
-                f"--gcs_scratch_location={staging_location}",
+                f"--gcs_scratch_location={gcs_scratch_location}",
             ],
             ports=[dict(containerPort=_PATHWAYS_RESOURCE_MANAGER_PORT)],
         )
@@ -1472,33 +1544,20 @@ class PathwaysLeaderWorkerTemplate(BaseLeaderWorkerTemplate):
             ports=([dict(containerPort=cfg.target_port)] if cfg.enable_service else []),
         )
 
-        # Add health probes for inference pods when service is enabled.
-        # This ensures K8s services only route traffic to healthy pods that have
-        # finished loading models and are ready to serve requests.
-        if cfg.enable_health_probes:
-            # startupProbe: Allows long startup time for model loading.
-            # Max startup time = failureThreshold * periodSeconds.
-            container["startupProbe"] = {
-                "httpGet": {
-                    "path": cfg.health_check_path,
-                    "port": cfg.health_check_port,
-                },
-                "initialDelaySeconds": 30,
-                "periodSeconds": 10,
-                "timeoutSeconds": 5,
-                "failureThreshold": cfg.startup_probe_failure_threshold,
-            }
-            # readinessProbe: Checks if the pod is ready to receive traffic.
-            # Once startup completes, this probe runs to determine traffic routing.
-            container["readinessProbe"] = {
-                "httpGet": {
-                    "path": cfg.health_check_path,
-                    "port": cfg.health_check_port,
-                },
-                "periodSeconds": 10,
-                "timeoutSeconds": 5,
-                "failureThreshold": 3,
-            }
+        logging.info("Checking if we have probes to apply")
+        # Apply configured startup/readiness/liveness probes from the inner builder.
+        startup = self._inner.startup_probe
+        if startup.is_configured():
+            logging.info("Adding startup probe")
+            container["startupProbe"] = startup.build_startup_probe()
+        readiness = self._inner.readiness_probe
+        if readiness.is_configured():
+            logging.info("Adding readiness probe")
+            container["readinessProbe"] = readiness.build_readiness_probe()
+        liveness = self._inner.liveness_probe
+        if liveness.is_configured():
+            logging.info("Adding liveness probe")
+            container["livenessProbe"] = liveness.build_liveness_probe()
 
         return container
 

@@ -13,7 +13,6 @@ from axlearn.common import logit_modifiers
 from axlearn.common.attention import (
     AttentionLogitBiasLayer,
     BaseStackedTransformerLayer,
-    CausalAttentionLogitBiasLayer,
     ForwardMode,
     StackedTransformerLayer,
 )
@@ -47,11 +46,13 @@ from axlearn.common.module import (
     child_context,
     current_context,
     new_output_collection,
+    nowrap,
 )
 from axlearn.common.utils import (
     Nested,
     NestedTensor,
-    TensorSpec,
+    maybe_shard,
+    sequence_mask,
     validate_contains_paths,
     with_sharding_constraint,
 )
@@ -104,18 +105,24 @@ def _segment_ids_from_causal_input_ids(input_ids: Tensor, *, pad_token_id: int) 
     return jax.lax.cummax(non_pad_indicator, axis=input_ids.ndim - 1, reverse=True)
 
 
-def _scores_from_logits(
+def log_probs_from_logits(
     logits: Tensor, logits_modifier: Optional[LogitsToLogitsFn] = None
 ) -> Tensor:
-    """Produces decoding scores from logits and optional logit modifier."""
-    if logits.dtype in (jnp.bfloat16, jnp.float16):
-        # Cast for log softmax.
-        logits = logits.astype(jnp.float32)
+    """Computes log probabilities from logits, with an optional modifier.
 
+    Args:
+        logits: A float Tensor of shape [..., vocab_size].
+        logits_modifier: An optional function to modify the log probabilities
+            (e.g. top-k, top-p filtering). Applied after log_softmax.
+
+    Returns:
+        Log probabilities of same shape as logits.
+    """
+    if logits.dtype in (jnp.bfloat16, jnp.float16):
+        logits = logits.astype(jnp.float32)
     log_probs = jax.nn.log_softmax(logits)
     if logits_modifier is not None:
         log_probs = logits_modifier(log_probs)
-
     return log_probs
 
 
@@ -128,7 +135,7 @@ class BaseDecoder(Protocol):
     def prng_key(self) -> Tensor:
         """A PRNG key for sampling."""
 
-    # TODO(markblee): Remove this in favor of prefill_states.
+    @nowrap
     def init_states(
         self, *, batch_size: int, max_sequence_length: int, dtype: jnp.dtype
     ) -> Nested[Tensor]:
@@ -143,13 +150,11 @@ class BaseDecoder(Protocol):
             The cache as a Nested Tensor with key and value initialized.
         """
 
+    # TODO(dhwang2): Remove this in favor of init_states.
     def prefill_states(
         self, *, time_step: Tensor, input_batch: Nested[Tensor], **kwargs
     ) -> tuple[Nested[Tensor], Nested[Tensor]]:
-        """Initializes cache for autoregressive cached decoding.
-
-        TODO(markblee): Rename to init_states once we add support for decoding at non-zero time
-        step.
+        """Initializes cache for autoregressive cached decoding, DEPRECATED.
 
         Args:
             time_step: A Tensor of shape [batch]. Each value is an index into the length dimension
@@ -166,7 +171,13 @@ class BaseDecoder(Protocol):
         """
 
     def extend_step(
-        self, *, cached_states: Nested[Tensor], input_batch: Nested[Tensor], **kwargs
+        self,
+        *,
+        cached_states: Nested[Tensor],
+        input_batch: Nested[Tensor],
+        is_prefill: bool = False,
+        segment_ids: Optional[Tensor] = None,
+        **kwargs,
     ) -> tuple[Nested[Tensor], Nested[Tensor]]:
         """Computes incremental outputs during autoregressive decoding.
 
@@ -177,6 +188,9 @@ class BaseDecoder(Protocol):
                 input_ids: An int Tensor of shape [batch, target_step_length], where
                     `target_step_length` is 1.
                 Additional modality data (e.g., audio) can be included for multimodal decoding.
+            is_prefill: If True, uses ForwardMode.PREFILL; otherwise ForwardMode.EXTEND_STEP.
+            segment_ids: An optional Tensor of shape [batch, target_step_length].
+                Values must be binary: 0 for padding, 1 for valid tokens.
             kwargs: Additional kwargs for incremental decoding.
 
         Returns:
@@ -238,7 +252,7 @@ class DecodingLayer(Configurable):
         validate_contains_paths(input_batch, paths=["prefix"])
         prefix = input_batch["prefix"]
 
-        cfg: DecodingLayer.Config = self.config
+        cfg = self.config
         tokens_to_scores_fn = self._tokens_to_scores(
             num_decodes=num_decodes,
             cross_attention_data=cross_attention_data,
@@ -251,6 +265,8 @@ class DecodingLayer(Configurable):
         time_step = infer_initial_time_step(prefix, pad_id=cfg.pad_token_id)
         prefill_batch = {**input_batch}
         prefill_batch["input_ids"] = input_ids
+        # Note: it prefills `k-1` tokens and used the last prefix token in first generation loop.
+        # TODO(axlearn-dev): prefill all prefix tokens in one shot.
         init_states, _ = self._decoder.prefill_states(
             time_step=time_step,
             input_batch=prefill_batch,
@@ -306,43 +322,61 @@ class DecodingLayer(Configurable):
         """
         validate_contains_paths(input_batch, paths=["prefix"])
         prefix = input_batch["prefix"]
-
-        cfg: DecodingLayer.Config = self.config
+        cfg = self.config
         logits_modifier = maybe_instantiate(logits_modifier)
-        tokens_to_scores_fn = self._tokens_to_scores(
-            num_decodes=num_decodes,
-            cross_attention_data=cross_attention_data,
-            cross_attention_logit_biases=cross_attention_logit_biases,
-            logits_modifier=logits_modifier,
-        )
+
         input_ids = self._pad(
             prefix, max_sequence_length=max_sequence_length, pad_id=cfg.pad_token_id
         )
-        time_step = infer_initial_time_step(prefix, pad_id=cfg.pad_token_id)
-        prefill_batch = {**input_batch}
-        prefill_batch["input_ids"] = input_ids
+        prefill_len = infer_initial_time_step(prefix, pad_id=cfg.pad_token_id) + 1
+
+        # Prefill all prefix tokens in one shot.
         init_states, init_outputs = self._decoder.prefill_states(
-            time_step=time_step,
-            input_batch=prefill_batch,
+            time_step=prefill_len,
+            input_batch={**input_batch, "input_ids": input_ids},
             cross_attention_data=cross_attention_data,
             cross_attention_logit_biases=cross_attention_logit_biases,
         )
-        init_scores = _scores_from_logits(init_outputs["logits"], logits_modifier=logits_modifier)
-        # Extract scores corresponding to prefix tokens. Since each sequence in input_ids starts
-        # with the [BOS] token, shift them so they line up with the scores of the output tokens.
-        score_indices = jnp.roll(input_ids[:, :, None], shift=-1)
-        # [batch_size, seq_len, vocab_size] --> [batch_size, seq_len].
-        init_scores = jnp.squeeze(jnp.take_along_axis(init_scores, score_indices, axis=-1), axis=-1)
+        logsoftmax = log_probs_from_logits(init_outputs["logits"], logits_modifier=logits_modifier)
+
+        def _input_ids_after_prefill(input_ids, logsoftmax, first_key):
+            # Sample the first generated token from the last prefilled position's logits,
+            # then place it in input_ids so sample_decode treats it as part of the prompt.
+            batch_idx = jnp.arange(input_ids.shape[0])
+            first_gen_logits = logsoftmax[batch_idx, prefill_len - 1, :]
+            first_gen_token = jax.random.categorical(first_key, logits=first_gen_logits)
+            oh = jax.nn.one_hot(prefill_len, input_ids.shape[1], dtype=input_ids.dtype)
+            input_ids = input_ids * (1 - oh) + first_gen_token[:, None] * oh
+            return input_ids
+
+        first_key, decode_key = jax.random.split(self._decoder.prng_key)
+        input_ids = _input_ids_after_prefill(input_ids, logsoftmax, first_key)
+
+        # Compute per-token scores: init_scores[b, i] = log P(input_ids[b, i+1] | tokens 0..i).
+        def _get_init_scores(logsoftmax, input_ids):
+            indices = jnp.roll(input_ids, shift=-1)[:, :, None]
+            init_scores = jnp.squeeze(jnp.take_along_axis(logsoftmax, indices, axis=-1), axis=-1)
+            score_mask = sequence_mask(lengths=prefill_len, max_len=init_scores.shape[-1])
+            init_scores = init_scores * score_mask
+            return init_scores
+
+        init_scores = _get_init_scores(logsoftmax, input_ids)
+
         return sample_decode(
             inputs=input_ids,
-            time_step=time_step,
+            time_step=prefill_len,
             cache=init_states,
-            tokens_to_scores=tokens_to_scores_fn,
+            tokens_to_scores=self._tokens_to_scores(
+                num_decodes=num_decodes,
+                cross_attention_data=cross_attention_data,
+                cross_attention_logit_biases=cross_attention_logit_biases,
+                logits_modifier=logits_modifier,
+            ),
             stop_decoding_condition=(
                 stop_decoding_condition or StopOnSubsequence([[cfg.eos_token_id]])
             ),
             num_decodes=num_decodes,
-            prng_key=self._decoder.prng_key,
+            prng_key=decode_key,
             pad_id=cfg.pad_token_id,
             input_token_scores=init_scores,
         )
@@ -418,7 +452,7 @@ class DecodingLayer(Configurable):
                 )
 
             logits = outputs["logits"]
-            log_probs = _scores_from_logits(logits[:, -1, :], logits_modifier=logits_modifier)
+            log_probs = log_probs_from_logits(logits[:, -1, :], logits_modifier=logits_modifier)
             return log_probs, updated_state
 
         return tokens_to_scores
@@ -447,11 +481,9 @@ class Decoder(BaseLayer):
     class Config(BaseLayer.Config):
         """Configures Decoder."""
 
-        # attention_mask can be None if the attention layer supports the causal mode, e.g.,
-        # FlashAttention with `causal=True`.
-        attention_mask: Optional[AttentionLogitBiasLayer.Config] = (
-            CausalAttentionLogitBiasLayer.default_config()
-        )
+        # DEPRECATED, because `attention_mask` uses quadratic memory, even with Flash Attention.
+        # Please use `attention.mask`, which constructs the mask procedurally.
+        attention_mask: Optional[AttentionLogitBiasLayer.Config] = None
         vocab_size: Required[int] = REQUIRED  # Size of vocabulary.
         # Dimensionality of embeddings and inputs to each transformer layer.
         dim: Required[int] = REQUIRED
@@ -543,30 +575,18 @@ class Decoder(BaseLayer):
                 cross_attention_logit_biases=cross_attention_logit_biases,
             )
             cached_states = None
-        elif mode == ForwardMode.INIT_STATES:
+        elif mode in (ForwardMode.PREFILL, ForwardMode.EXTEND_STEP):
             assert cached_states is not None
-            if input_segment_ids is not None:
-                raise ValueError("input_segment_ids is not supported in INIT_STATES.")
             cached_states["emb"], x = self.emb.extend_step(
-                cached_states=cached_states["emb"], input_batch=emb_batch
-            )
-            cached_states["transformer_state"], x = self.transformer.init_states(
-                time_step=cached_states["transformer_state"],
-                data=x,
-                self_attention_logit_biases=self_attention_logit_biases,
-                cross_attention_data=cross_attention_data,
-                cross_attention_logit_biases=cross_attention_logit_biases,
-            )
-        elif mode == ForwardMode.EXTEND_STEP:
-            assert cached_states is not None
-            if input_segment_ids is not None:
-                raise ValueError("input_segment_ids is not supported in EXTEND_STEP.")
-            cached_states["emb"], x = self.emb.extend_step(
-                cached_states=cached_states["emb"], input_batch=emb_batch
+                cached_states=cached_states["emb"],
+                input_batch=emb_batch,
+                is_prefill=(mode == ForwardMode.PREFILL),
             )
             cached_states["transformer_state"], x = self.transformer.extend_step(
                 cached_states=cached_states["transformer_state"],
                 data=x,
+                is_prefill=(mode == ForwardMode.PREFILL),
+                target_segment_ids=input_segment_ids,
                 self_attention_logit_biases=self_attention_logit_biases,
                 cross_attention_data=cross_attention_data,
                 cross_attention_logit_biases=cross_attention_logit_biases,
@@ -582,6 +602,20 @@ class Decoder(BaseLayer):
             self._add_tensor_stats("norm_outputs", x)
         x = self.output_dropout(x)
 
+        return cached_states, dict(hidden_states=x)
+
+    def compute_logits(self, forward_outputs: Nested[Tensor]) -> Tensor:
+        """Computes logits from decoder forward outputs.
+
+        Args:
+            forward_outputs: A dict containing:
+                hidden_states: A float Tensor of shape [batch_size, target_len, hidden_dim].
+
+        Returns:
+            A float Tensor of shape [batch_size, target_len, num_classes].
+        """
+        x: Tensor = forward_outputs["hidden_states"]
+
         if self.config.logits_forward_dtype == jnp.float32:
             logits_context = jax.default_matmul_precision("float32")
         else:
@@ -593,6 +627,9 @@ class Decoder(BaseLayer):
                 if self.config.logits_forward_dtype
                 else x
             )
+            # Shard hidden states before the logit matmul to prevent XLA from
+            # materializing the full [batch, seq, vocab] tensor.
+            logits_x = maybe_shard(logits_x, self.config.logits_partition_spec)
             if "lm_head" in self.children:
                 logits = self.lm_head(logits_x)
             else:
@@ -603,8 +640,7 @@ class Decoder(BaseLayer):
         if self._output_logits_modifier is not None:
             logits = self._output_logits_modifier(logits)
         logits = with_sharding_constraint(logits, PartitionSpec(*self.config.logits_partition_spec))
-        # TODO(markblee): Rename to just "transformer". "transformer_state" is a bit redundant.
-        return cached_states, dict(logits=logits, hidden_states=x)
+        return logits
 
     def forward(
         self,
@@ -614,8 +650,7 @@ class Decoder(BaseLayer):
         cross_attention_logit_biases: Optional[Tensor] = None,
         **kwargs,
     ) -> dict[str, Tensor]:
-        """Computes decoder hidden states and logits from input ids and cross attention hidden
-        states.
+        """Computes decoder hidden states from input ids and cross attention hidden states.
 
         Args:
             input_batch: A dict containing:
@@ -636,8 +671,6 @@ class Decoder(BaseLayer):
         Returns:
             A dict containing:
                 hidden_states: A float Tensor of shape [batch_size, target_len, hidden_dim].
-                logits: A float Tensor of shape [batch_size, target_len, num_classes], where
-                    num_classes depends on the configured lm_head.
         """
         validate_contains_paths(input_batch, paths=["input_ids"])
         input_ids = input_batch["input_ids"]
@@ -658,15 +691,15 @@ class Decoder(BaseLayer):
         )
         return output
 
+    @nowrap
     def init_states(
         self, *, batch_size: int, max_sequence_length: int, dtype: jnp.dtype
     ) -> NestedTensor:
         """See `BaseDecoder.init_states` for details."""
         cfg: Decoder.Config = self.config
         emb = self.emb.init_states(batch_size=batch_size, dtype=dtype)
-        transformer_state, _ = self.transformer.init_states(
-            time_step=None,
-            data=TensorSpec([batch_size, max_sequence_length, cfg.dim], dtype=dtype),
+        transformer_state = self.transformer.init_states(
+            batch_size=batch_size, max_len=max_sequence_length, dtype=dtype
         )
         init_state = dict(
             emb=emb,
@@ -679,6 +712,7 @@ class Decoder(BaseLayer):
             )
         return init_state
 
+    # TODO(dhwang2): delete this API.
     def prefill_states(
         self,
         *,
@@ -686,21 +720,26 @@ class Decoder(BaseLayer):
         input_batch: Nested[Tensor],
         **kwargs,
     ) -> tuple[Nested[Tensor], Nested[Tensor]]:
-        """See `BaseDecoder.prefill_states` for details.
+        """See `BaseDecoder.prefill_states` for details, DEPRECATED.
 
         Args:
-            time_step: A Tensor of shape [batch_size]. See `BaseDecoder.prefill_states` for details.
+            time_step: A Tensor of shape [batch_size] representing the number of tokens to
+                prefill per example (i.e., prefill_len).
             input_batch: See `forward` for details.
             kwargs: See `forward` for details.
 
         Returns:
             See `BaseDecoder.prefill_states` for details.
         """
-        cfg = self.config
         validate_contains_paths(input_batch, paths=["input_ids"])
         input_ids: Tensor = input_batch["input_ids"]
-        input_segment_ids = input_batch.get("input_segment_ids", None)
-        positions = input_batch.get("positions", None)
+        if "input_segment_ids" in input_batch:
+            raise ValueError("input_segment_ids is supported only in FORWARD.")
+        if "positions" in input_batch:
+            raise ValueError("positions is supported only in FORWARD.")
+
+        batch_size = input_ids.shape[0]
+        max_sequence_length = input_ids.shape[1]
 
         # TODO(dhwang2): Remove this temp solution. After PR #2057, emb prefill uses init_states.
         def infer_fwd_dtype():
@@ -711,22 +750,20 @@ class Decoder(BaseLayer):
             return first_float_leaf.dtype if first_float_leaf is not None else self.dtype()
 
         fwd_dtype = infer_fwd_dtype()
-        with child_context("emb_init_states", module=self.emb):
-            emb = self.emb.init_states(batch_size=input_ids.shape[0], dtype=fwd_dtype)
-        states, outputs = self._forward_for_mode(
-            mode=ForwardMode.INIT_STATES,
-            cached_states=dict(emb=emb, transformer_state=time_step),
-            input_batch=input_batch,
-            # TODO(markblee): Consider supporting packed inputs for more efficient prefilling.
-            self_attention_logit_biases=self.compute_attention_logit_biases(
-                input_ids, segment_ids=input_segment_ids, positions=positions
-            ),
+        cached_states = self.init_states(
+            batch_size=batch_size, max_sequence_length=max_sequence_length, dtype=fwd_dtype
+        )
+        states, outputs = self.extend_step(
+            cached_states=cached_states,
+            input_batch={
+                **input_batch,
+                "input_segment_ids": sequence_mask(
+                    lengths=time_step, max_len=input_ids.shape[1], dtype=jnp.int32
+                ),
+            },
+            is_prefill=True,
             **kwargs,
         )
-        self.add_module_output("prefill_hidden_states", outputs["hidden_states"])
-        states["time_step"] = time_step
-        if cfg.attention_mask is not None:
-            states["input_ids"] = input_ids
         return states, outputs
 
     def extend_step(
@@ -734,10 +771,12 @@ class Decoder(BaseLayer):
         *,
         cached_states: Nested[Tensor],
         input_batch: Nested[Tensor],
+        is_prefill: bool = False,
         **kwargs,
     ) -> tuple[Nested[Tensor], Nested[Tensor]]:
         """See `BaseDecoder.forward_step` for details."""
         cfg = self.config
+        mode = ForwardMode.PREFILL if is_prefill else ForwardMode.EXTEND_STEP
         time_step: Tensor = cached_states["time_step"]
         assert time_step.ndim == 1
 
@@ -774,24 +813,31 @@ class Decoder(BaseLayer):
         else:
             self_attention_biases = None
 
-        if "input_segment_ids" in kwargs:
-            raise ValueError("input_segment_ids is supported only in FORWARD.")
         if "positions" in kwargs:
             raise ValueError("positions is supported only in FORWARD.")
 
+        input_segment_ids = input_batch.get("input_segment_ids", None)
         updated_states, outputs = self._forward_for_mode(
-            mode=ForwardMode.EXTEND_STEP,
+            mode=mode,
             input_batch={**input_batch, "positions": positions},  # emb may use positional encoding
             self_attention_logit_biases=self_attention_biases,
             cached_states=cached_states,
             **kwargs,
+        )
+        # Logits are included here (unlike forward()) because decoding always needs them,
+        # and the tensor is small ([B, step, V]) compared to full-sequence forward ([B, T, V]).
+        outputs["logits"] = self.compute_logits(outputs)
+        if mode == ForwardMode.PREFILL:
+            self.add_module_output("prefill_hidden_states", outputs["hidden_states"])
+        step_len = (
+            jnp.sum(input_segment_ids != 0, axis=-1) if input_segment_ids is not None else step
         )
         updated_states.update(
             # There are some non-greedy DFS/BFS and sliding attention algorithms that
             # recursively search through potentials.
             # They backtrace to some anchor time step after exploring for t steps.
             # This requires tracking time_step separately from the attention time_step.
-            time_step=(cached_states["time_step"] + step),
+            time_step=(cached_states["time_step"] + step_len),
         )
         if cfg.attention_mask is not None:
             updated_states["input_ids"] = updated_inputs

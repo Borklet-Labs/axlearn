@@ -270,11 +270,137 @@ def _infer_job_count(jobset_spec: dict) -> Optional[int]:
     return None
 
 
-class GKERunnerJob(BaseRunnerJob):
+def _get_mismatched_node_pools(
+    name: str,
+    tier: str,
+    project: str,
+    zone: str,
+    cluster: str,
+    node_pool_label_key: str,
+) -> list[dict]:
+    """Returns node pool objects whose tier config doesn't match the given tier.
+
+    Compares reserved vs. spot configuration: tier=0 expects a reservation affinity,
+    tier>0 expects a spot taint. Any pool that doesn't match is returned for deletion.
+
+    Args:
+        name: The job name used to look up node pools by label.
+        tier: The current bastion tier (e.g., "0", "1").
+        project: GCP project.
+        zone: GCP zone.
+        cluster: GKE cluster name.
+        node_pool_label_key: Label key to use when looking up node pools.
+
+    Returns:
+        A list of node pool objects whose tier config mismatches the given tier.
+        Each object is the raw GCP API node pool dict, including a "name" field and
+        a "status" field (e.g. "RUNNING", "PROVISIONING").
+    """
+    node_pools = list_node_pools_by_label_key(
+        project=project, zone=zone, cluster=cluster, label_key=node_pool_label_key
+    ).get(name, [])
+    mismatched = []
+    for pool in node_pools:
+        pool_config = pool.get("config", {})
+        reservation_affinity = pool_config.get("reservationAffinity", {})
+        taints = pool_config.get("taints", [])
+        has_reservation = (
+            reservation_affinity.get("key") == "compute.googleapis.com/reservation-name"
+            and len(reservation_affinity.get("values", [])) > 0
+        )
+        has_spot = any(
+            taint.get("key") == "cloud.google.com/gke-spot"
+            and taint.get("value") == "true"
+            and taint.get("effect") == "NO_SCHEDULE"
+            for taint in taints
+        )
+        logging.info(
+            "Found existing node pool %s with tier %s.\n"
+            "The reservation affinity is: %s\n"
+            "The taints are: %s\n"
+            "has_reservation=%s, has_spot=%s",
+            pool["name"],
+            tier,
+            reservation_affinity,
+            taints,
+            has_reservation,
+            has_spot,
+        )
+        if (str(tier) == "0" and not has_reservation) or (str(tier) != "0" and not has_spot):
+            logging.info(
+                "Since there is a mismatch, we will attempt to delete %s.",
+                pool["name"],
+            )
+            mismatched.append(pool)
+        else:
+            logging.info("Node pool appears to have the right specs.")
+    return mismatched
+
+
+def _pre_provision(cfg, pre_provisioner: NodePoolProvisioner, inner) -> None:
+    """Deletes wrong-tier node pools left by a prior runner, then provisions new ones.
+
+    Used in the NOT_STARTED path for both GKERunnerJob and LWSRunnerJob to ensure the job
+    starts on a node pool matching the current bastion tier.
+
+    Args:
+        cfg: Runner job config with name, project, zone, cluster, retry_interval.
+        pre_provisioner: NodePoolProvisioner to use for provisioning.
+        inner: Inner job instance passed to pre_provisioner.create_for().
+    """
+    tier = os.environ.get("BASTION_TIER", 0)
+    mismatched = _get_mismatched_node_pools(
+        cfg.name, tier, cfg.project, cfg.zone, cfg.cluster, PRE_PROVISIONER_LABEL
+    )
+    pools_to_delete = [pool["name"] for pool in mismatched]
+    if pools_to_delete:
+        logging.info(
+            "Deleting %d wrong-tier node pool(s) before provisioning: %s",
+            len(pools_to_delete),
+            pools_to_delete,
+        )
+        delete_node_pools(
+            pools_to_delete,
+            project=cfg.project,
+            zone=cfg.zone,
+            cluster=cfg.cluster,
+            retry_interval=cfg.retry_interval,
+            wait_timeout=30 * 60 * len(pools_to_delete),
+        )
+    pre_provisioner.create_for(inner)
+
+
+class GKEBaseRunnerJob(BaseRunnerJob):
+    """Shared base for GKE runner jobs (JobSet and LeaderWorkerSet).
+
+    Defines the protocol of shared lifecycle hooks used by both
+    GKERunnerJob and LWSRunnerJob.
+    """
+
+    @property
+    def is_running(self) -> bool:
+        """Returns True when this job has reached its running/ready state."""
+        raise NotImplementedError(type(self))
+
+    def _get_build_name(self) -> str:
+        """Returns the identifier to wait on for the image build.
+        Override in subclasses to customize build name resolution."""
+        raise NotImplementedError(type(self))
+
+    def _on_build_finished(self):
+        """Called after image build completes successfully. Override for post-build actions."""
+        pass
+
+    def _on_job_submitted(self):
+        """Called after the job is submitted to k8s. Override for post-submission actions."""
+        pass
+
+
+class GKERunnerJob(GKEBaseRunnerJob):
     """Launches and monitors a GKE job via k8s JobSet API."""
 
     @config_class
-    class Config(BaseRunnerJob.Config):
+    class Config(GKEBaseRunnerJob.Config):
         """Configures GKERunnerJob.
 
         Attributes:
@@ -303,6 +429,7 @@ class GKERunnerJob(BaseRunnerJob):
         pre_provisioner: Optional[NodePoolProvisioner.Config] = None
         # The event publisher sends events into queue.
         event_publisher: Optional[BaseQueueClient.Config] = None
+        tags: Optional[list[str]] = None
 
     @classmethod
     def define_flags(cls, fv: flags.FlagValues = FLAGS):
@@ -320,6 +447,7 @@ class GKERunnerJob(BaseRunnerJob):
         flags.DEFINE_boolean(
             "enable_pre_provisioner", None, "Whether to enable pre-provisioner.", **common_kwargs
         )
+        flags.DEFINE_multi_string("tags", None, "Job specific tags.", **common_kwargs)
 
     @classmethod
     def set_defaults(cls, fv: flags.FlagValues):
@@ -369,6 +497,17 @@ class GKERunnerJob(BaseRunnerJob):
             ).instantiate()
 
         self._event_publisher: BaseQueueClient = maybe_instantiate(cfg.event_publisher)
+        self.last_status = None
+
+    def _get_build_name(self) -> str:
+        # pylint: disable-next=protected-access
+        image_id = self._inner._builder.config.image_id
+        return image_id or self.config.name
+
+    @property
+    def is_running(self) -> bool:
+        """Returns True when this job has reached its running/ready state."""
+        return self.last_status == GKERunnerJob.Status.READY
 
     class Status(enum.Enum):
         """GKE JobSet status.
@@ -402,6 +541,7 @@ class GKERunnerJob(BaseRunnerJob):
         SUCCEEDED = "SUCCEEDED"
         UPDATING = "UPDATING"
         RESCHEDULED = "RESCHEDULED"
+        PATCHED = "PATCHED"
 
     # TODO(markblee): Consider moving some of the logic here into the inner impl.
     def _get_status(self) -> Status:
@@ -420,19 +560,21 @@ class GKERunnerJob(BaseRunnerJob):
             if runner_utils.should_recreate_job(tier, reservation, processor_type=processor_type):
                 return GKERunnerJob.Status.RESCHEDULED
 
-            # Validate topology assignments match between builder config and deployed resource.
-            # If the builder expects a slice-selection annotation, check it matches the resource.
+            # Check if the deployed slice-selection annotation matches what the builder expects.
+            deployed_slice_selection = _slice_selection_annotation_from_resource(resource=resp)
             expected_slice_selection = self._inner.get_workload_annotations().get(
                 "tpu-provisioner.cloud.google.com/slice-selection"
             )
-            deployed_slice_selection = _slice_selection_annotation_from_resource(resource=resp)
-            if not _compare_slice_selection(expected_slice_selection, deployed_slice_selection):
+            topology_match = _compare_slice_selection(
+                expected_slice_selection, deployed_slice_selection
+            )
+            if not topology_match:
                 logging.info(
-                    "Topology assignment changed. Expected: %s, Deployed: %s",
+                    "Topology mismatch detected.\n  Expected: %s\n  Deployed: %s",
                     expected_slice_selection,
                     deployed_slice_selection,
                 )
-                return GKERunnerJob.Status.RESCHEDULED
+                return GKERunnerJob.Status.PATCHED
 
             expected_job_version = os.environ.get(BASTION_JOB_VERSION_ENV_VAR, None)
             current_job_version = _infer_job_version(resp["spec"])
@@ -472,37 +614,51 @@ class GKERunnerJob(BaseRunnerJob):
             # are "ready", in which case we consider the job as actually running.
             statuses = {k: 0 for k in ["failed", "ready", "succeeded"]}
             for job in resp["status"]["replicatedJobsStatus"]:
+                logging.info(
+                    "Replicated job %s: %s",
+                    job.get("name", "unknown"),
+                    {k: job.get(k, 0) for k in ("failed", "ready", "succeeded", "active")},
+                )
                 for status in statuses:
                     statuses[status] += job.get(status, 0)
-            logging.info("Statuses: %s", statuses)
+            logging.info("Aggregate statuses: %s", statuses)
+
+            # Return status if all replicas are accounted for and none have failed.
+            # Note: "failed" in replicatedJobsStatus is retryable — jobset automatically retries
+            # failed replicas. Once all retries are exhausted, jobset sets a top-level condition
+            # (Completed/Failed), which is already handled by the conditions loop above.
+            total_job_count = _infer_job_count(resp["spec"])
+            if (
+                total_job_count
+                and sum(statuses.values()) == total_job_count
+                and not statuses.get("failed", 0)
+            ):
+                # All replicas agree on a single non-failed status (e.g. all READY/SUCCEEDED).
+                for status, count in statuses.items():
+                    if status != "failed" and count == total_job_count:
+                        return GKERunnerJob.Status[status.upper()]
+                # Mixed ready/succeeded: some replicas done, others still running.
+                if statuses.get("ready", 0):
+                    return GKERunnerJob.Status.READY
+                # Unreachable: sum==total with no failed and no ready implies all succeeded,
+                # which the all-agree loop above would have already returned.
+                raise RuntimeError(f"Unexpected replicatedJobsStatus: {statuses}")
 
             # The job can enter PENDING state in a few different ways:
-            # 1. If any slice fails, and we're waiting on jobset to retry, we consider the job
-            #     PENDING. Note that if jobset fails overall, it'll show up in the "conditions"
-            #     above.
-            # 2. If all replicated job statuses above report 0, none of the jobs have started.
-            if (retryable_failure := statuses.get("failed", 0)) or all(
-                v == 0 for v in statuses.values()
+            # 1. Not all replicas are accounted for yet (e.g. Active but not yet Ready).
+            # 2. Partial degradation: replicas dropped without being formally marked failed.
+            # 3. Some replicas failed and jobset is retrying.
+            if statuses.get("failed", 0):
+                logging.info("One or more child jobs failed, waiting for jobset to retry.")
+            # Take this opportunity to reschedule if needed.
+            if runner_utils.should_recreate_job(
+                tier,
+                reservation,
+                processor_type=processor_type,
+                is_pending=True,
             ):
-                if retryable_failure:
-                    logging.info("One or more child jobs failed, waiting for jobset to retry.")
-                # Take this opportunity to reschedule if needed.
-                if runner_utils.should_recreate_job(
-                    tier,
-                    reservation,
-                    processor_type=processor_type,
-                    is_pending=True,
-                ):
-                    return GKERunnerJob.Status.RESCHEDULED
-                return GKERunnerJob.Status.PENDING
-
-            # Return status if all replicas agree.
-            total_job_count = _infer_job_count(resp["spec"])
-            for status, count in statuses.items():
-                # TODO(markblee): Fix this by refactoring _get_status to inner.
-                # By doing so, we can also get rid of the other GKERunnerJob subclasses.
-                if count == total_job_count:
-                    return GKERunnerJob.Status[status.upper()]
+                return GKERunnerJob.Status.RESCHEDULED
+            return GKERunnerJob.Status.PENDING
         except k8s.client.exceptions.ApiException as e:
             if e.status == 404:
                 return GKERunnerJob.Status.NOT_STARTED
@@ -517,6 +673,26 @@ class GKERunnerJob(BaseRunnerJob):
         self._inner._delete()  # pylint: disable=protected-access
         if self._pre_provisioner is not None:
             self._pre_provisioner.delete_for(self._inner)
+
+    def _patch_topology(self):
+        """Patch the JobSet's slice-selection annotation in-place."""
+        cfg: GKERunnerJob.Config = self.config
+        expected_annotations = self._inner.get_workload_annotations()
+        slice_selection = expected_annotations.get(
+            "tpu-provisioner.cloud.google.com/slice-selection"
+        )
+        logging.info(
+            "Patching JobSet %s slice-selection annotation in-place. Value: %s",
+            cfg.name,
+            slice_selection,
+        )
+        try:
+            self._inner._patch_annotations(  # pylint: disable=protected-access
+                {"tpu-provisioner.cloud.google.com/slice-selection": slice_selection}
+            )
+            logging.info("Successfully patched JobSet %s.", cfg.name)
+        except Exception as e:  # pylint: disable=broad-except
+            logging.error("Failed to patch JobSet %s: %s", cfg.name, e)
 
     def _reschedule(self):
         """Reschedules the jobset onto the appropriate tier.
@@ -604,7 +780,6 @@ class GKERunnerJob(BaseRunnerJob):
 
         # Keep track of last status to prevent duplicate events.
         last_job_status = None
-
         # Track when the job enters SUSPENDED state.
         suspended_since = None
 
@@ -613,6 +788,7 @@ class GKERunnerJob(BaseRunnerJob):
 
         while True:
             status = self._get_status()
+            self.last_status = status
 
             # Don't retry if FAILED, since we ask GKE to handle retries.
             # Note that job remains ACTIVE until all retries are exhausted.
@@ -630,26 +806,28 @@ class GKERunnerJob(BaseRunnerJob):
                 logging.info("Task %s exited with status: %s.", cfg.name, status)
                 return
             elif status == GKERunnerJob.Status.RESCHEDULED:
-                logging.info("Jobset configuration changed. Rescheduling the jobset...")
+                logging.info("RESCHEDULED detected, performing full reschedule.")
                 self._reschedule()
+            elif status == GKERunnerJob.Status.PATCHED:
+                logging.info("Topology mismatch detected, patching annotation.")
+                self._patch_topology()
             elif status == GKERunnerJob.Status.UPDATING:
                 logging.info("Newer job version is available. Relaunching the jobset...")
                 self._inner._delete()  # pylint: disable=protected-access
             elif status == GKERunnerJob.Status.NOT_STARTED:
                 logging.info("Task has not started. Starting it now...")
-                # pylint: disable-next=protected-access
-                image_id = self._inner._builder.config.image_id
                 try:
                     # Note: while the wait is blocking, the bastion will kill the runner process
                     # when it needs to reschedule.
                     wait_build_start = time.perf_counter()
-                    self._bundler.wait_until_finished(image_id or cfg.name)
+                    self._bundler.wait_until_finished(self._get_build_name())
                     metrics.record_job_wait_for_build(
                         cfg.name, time.perf_counter() - wait_build_start
                     )
                     self._maybe_publish(
                         cfg.name, msg="Cloud build finished", state=JobLifecycleState.STARTING
                     )
+                    self._on_build_finished()
                 except RuntimeError as e:
                     logging.error("Bundling failed: %s. Aborting the job.", e)
                     return
@@ -657,9 +835,10 @@ class GKERunnerJob(BaseRunnerJob):
                 # Provision node pools for the job to run.
                 provisioning_start = time.perf_counter()
                 if self._pre_provisioner is not None:
-                    self._pre_provisioner.create_for(self._inner)
+                    _pre_provision(cfg, self._pre_provisioner, self._inner)
 
                 self._inner.execute()
+                self._on_job_submitted()
                 self._maybe_publish(
                     cfg.name, msg="Provisioning resources", state=JobLifecycleState.STARTING
                 )
@@ -834,11 +1013,11 @@ class FlinkGKERunnerJob(GKERunnerJob):
         return GKERunnerJob.Status.UNKNOWN
 
 
-class LWSRunnerJob(BaseRunnerJob):
+class LWSRunnerJob(GKEBaseRunnerJob):
     """Launches and monitors a GKE job via k8s LWS API."""
 
     @config_class
-    class Config(BaseRunnerJob.Config):
+    class Config(GKEBaseRunnerJob.Config):
         """Configures LWSRunnerJob.
 
         Attributes:
@@ -867,6 +1046,7 @@ class LWSRunnerJob(BaseRunnerJob):
         pre_provisioner: Optional[NodePoolProvisioner.Config] = None
         # The event publisher sends events into queue.
         event_publisher: Optional[BaseQueueClient.Config] = None
+        tags: Optional[list[str]] = None
 
     @classmethod
     def define_flags(cls, fv: flags.FlagValues = FLAGS):
@@ -884,6 +1064,7 @@ class LWSRunnerJob(BaseRunnerJob):
         flags.DEFINE_boolean(
             "enable_pre_provisioner", None, "Whether to enable pre-provisioner.", **common_kwargs
         )
+        flags.DEFINE_multi_string("tags", None, "Job specific tags.", **common_kwargs)
 
     @classmethod
     def set_defaults(cls, fv: flags.FlagValues):
@@ -932,6 +1113,17 @@ class LWSRunnerJob(BaseRunnerJob):
             ).instantiate()
 
         self._event_publisher: BaseQueueClient = maybe_instantiate(cfg.event_publisher)
+        self.last_status = None
+
+    def _get_build_name(self) -> str:
+        # pylint: disable-next=protected-access
+        image_id = self._inner._builder.config.image_id
+        return image_id or self.config.name
+
+    @property
+    def is_running(self) -> bool:
+        """Returns True when this job has reached its running/ready state."""
+        return self.last_status == LWSRunnerJob.Status.RUNNING
 
     class Status(enum.Enum):
         """GKE LeaderWorkerSet status.
@@ -982,7 +1174,15 @@ class LWSRunnerJob(BaseRunnerJob):
             tier = os.environ.get("BASTION_TIER", 0)
             reservation = _infer_reservation_from_lws(resp["spec"])
             processor_type = _infer_processor_type_from_lws(resp["spec"])
-            if runner_utils.should_recreate_job(tier, reservation, processor_type=processor_type):
+            # Hardcode is_pending=True: ideally we would only reschedule tier promotions
+            # (tier=0, no reservation) when the LWS is not actively running, letting running
+            # jobs continue until preemption. However, current LWS status conditions don't
+            # reliably reflect whether workers are actually running, so we always reschedule.
+            # Once LWS conditions are more dependable this can be revisited:
+            # https://github.com/kubernetes-sigs/lws/commit/7a4e3c1638d75c235aa1d79dce1dc4fe16b09269
+            if runner_utils.should_recreate_job(
+                tier, reservation, processor_type=processor_type, is_pending=True
+            ):
                 return LWSRunnerJob.Status.RESCHEDULED
 
             # Validate topology assignments match between builder config and deployed resource.
@@ -1062,66 +1262,50 @@ class LWSRunnerJob(BaseRunnerJob):
             node_pool_label_key = PRE_PROVISIONER_LABEL
         logging.info("Looking up node pools with label key: %s", node_pool_label_key)
 
-        node_pools_dict = list_node_pools_by_label_key(
-            project=cfg.project, zone=cfg.zone, cluster=cfg.cluster, label_key=node_pool_label_key
+        tier = os.environ.get("BASTION_TIER", 0)
+        mismatched = _get_mismatched_node_pools(
+            cfg.name, tier, cfg.project, cfg.zone, cfg.cluster, node_pool_label_key
         )
-        node_pools = node_pools_dict.get(cfg.name, [])
-        logging.info("Found %d node pool(s) for %s", len(node_pools), cfg.name)
-        if len(node_pools) == 0:
-            logging.info("Could not infer node pool, skipping delete.")
-            return
-        node_pools_to_delete = []
-        for node_pool in node_pools:
-            node_pool_config = node_pool.get("config", {})
-            reservation_affinity = node_pool_config.get("reservationAffinity", {})
-            taints = node_pool_config.get("taints", [])
-            tier = os.environ.get("BASTION_TIER", 0)
-            has_reservation = (
-                reservation_affinity.get("key") == "compute.googleapis.com/reservation-name"
-                and len(reservation_affinity.get("values", [])) > 0
-            )
-            has_spot = any(
-                taint.get("key") == "cloud.google.com/gke-spot"
-                and taint.get("value") == "true"
-                and taint.get("effect") == "NO_SCHEDULE"
-                for taint in taints
-            )
-            logging.info(
-                "Found existing node pool %s with tier %s.\n"
-                "The reservation affinity is: %s\n"
-                "The taints are: %s\n"
-                "has_reservation=%s, has_spot=%s",
-                node_pool["name"],
-                tier,
-                reservation_affinity,
-                taints,
-                has_reservation,
-                has_spot,
-            )
-            if (str(tier) == "0" and not has_reservation) or (str(tier) != "0" and not has_spot):
-                logging.info(
-                    "Since there is a mismatch, we will attempt to delete %s.",
-                    node_pool["name"],
-                )
-                node_pools_to_delete.append(node_pool["name"])
-            else:
-                logging.info("Node pool appears to have the right specs.")
-        if len(node_pools_to_delete) > 0:
+        pools_to_delete = [pool["name"] for pool in mismatched]
+        if pools_to_delete:
             start_time = time.perf_counter()
-            delete_node_pools(
-                node_pools_to_delete,
-                project=cfg.project,
-                zone=cfg.zone,
-                cluster=cfg.cluster,
-                retry_interval=cfg.retry_interval,
-                wait_timeout=30 * 60 * len(node_pools_to_delete),
-            )
+            self._delete_node_pools(pools_to_delete)
             elapsed_time = time.perf_counter() - start_time
-            logging.info(
-                "Node pools %s deletion took %s seconds", node_pools_to_delete, elapsed_time
-            )
+            logging.info("Node pools %s deletion took %s seconds", pools_to_delete, elapsed_time)
         else:
             logging.info("No node pools require deletion.")
+
+    def _delete_node_pools(self, pools: list[str]):
+        """Deletes the given node pools using job config parameters."""
+        cfg: LWSRunnerJob.Config = self.config
+        delete_node_pools(
+            pools,
+            project=cfg.project,
+            zone=cfg.zone,
+            cluster=cfg.cluster,
+            retry_interval=cfg.retry_interval,
+            wait_timeout=30 * 60 * len(pools),
+        )
+
+    def _start(self):
+        """Waits for bundling, cleans up wrong-tier pools, and submits the LWS.
+
+        Raises:
+            RuntimeError: If bundling failed and the job should be aborted.
+        """
+        cfg: LWSRunnerJob.Config = self.config
+        # Note: while the wait is blocking, the bastion will kill the runner process
+        # when it needs to reschedule.
+        self._bundler.wait_until_finished(self._get_build_name())
+        self._on_build_finished()
+
+        # Before provisioning, remove any wrong-tier node pools left by a prior runner,
+        # then provision new ones for the job to run.
+        if self._pre_provisioner is not None:
+            _pre_provision(cfg, self._pre_provisioner, self._inner)
+
+        self._inner.execute()
+        self._on_job_submitted()
 
     def _execute(self):
         cfg: LWSRunnerJob.Config = self.config
@@ -1130,6 +1314,7 @@ class LWSRunnerJob(BaseRunnerJob):
         last_job_status = None
         while True:
             status = self._get_status()
+            self.last_status = status
 
             # Don't retry if FAILED, since we ask GKE to handle retries.
             # Note that LeaderWorkerSet remains ACTIVE until all retries are exhausted.
@@ -1147,21 +1332,11 @@ class LWSRunnerJob(BaseRunnerJob):
                 self._reschedule()
             elif status == LWSRunnerJob.Status.NOT_STARTED:
                 logging.info("Task has not started. Starting it now...")
-                # pylint: disable-next=protected-access
-                image_id = self._inner._builder.config.image_id
                 try:
-                    # Note: while the wait is blocking, the bastion will kill the runner process
-                    # when it needs to reschedule.
-                    self._bundler.wait_until_finished(image_id or cfg.name)
-                except RuntimeError as e:
-                    logging.error("Bundling failed: %s. Aborting the job.", e)
+                    self._start()
+                except RuntimeError:
+                    logging.exception("Failed to start job. Aborting.")
                     return
-
-                # Provision node pools for the job to run.
-                if self._pre_provisioner is not None:
-                    self._pre_provisioner.create_for(self._inner)
-
-                self._inner.execute()
             else:
                 # Ensure VertexAI Tensorboard Uploader is running.
                 if self._tb_uploader:

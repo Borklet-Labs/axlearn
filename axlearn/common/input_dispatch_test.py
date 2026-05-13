@@ -6,8 +6,7 @@ import random
 
 import jax
 import numpy as np
-import pytest
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
 from jax import numpy as jnp
 from jax.sharding import PartitionSpec
 
@@ -134,7 +133,7 @@ class SpmdInputDispatcherTest(TestCase):
         print(f"{device_count=}, {process_count=}")
         # E.g., run on v5e-16.
         if process_count % divisor != 0:
-            pytest.skip(reason="Incompatible process_count/divisor.")
+            self.skipTest("Incompatible process_count/divisor.")
 
         with jax.sharding.Mesh(np.array(jax.devices()).reshape(1, -1), ("x", "y")) as mesh:
             # Shard dim=0 only along data.
@@ -191,12 +190,12 @@ class SpmdInputDispatcherTest(TestCase):
                 np.concatenate(stacked_batch["x"][stacked_batch["idx"]], axis=0),
             )
 
-    @pytest.mark.for_8_devices
     def test_validate(self):
         """Tests that we raise if attempting an invalid partition."""
 
         device_count = jax.device_count()
-        assert device_count > 1
+        if device_count <= 1:
+            self.skipTest("Requires multiple devices.")
 
         with jax.sharding.Mesh(np.array(jax.devices()).reshape(1, -1), ("x", "y")) as mesh:
             # Shard dim=0 only along data.
@@ -215,3 +214,7 @@ class SpmdInputDispatcherTest(TestCase):
 
             with self.assertRaisesRegex(ValueError, "empty"):
                 cfg.clone(partition_spec=PartitionSpec()).instantiate(parent=None)
+
+
+if __name__ == "__main__":
+    absltest.main()

@@ -11,6 +11,7 @@ from unittest import mock
 
 from absl.testing import absltest, parameterized
 
+from axlearn.cloud.common.job_types import JobStateMetadata, ResourceMap
 from axlearn.cloud.common.quota import QuotaInfo
 from axlearn.cloud.common.scheduler import (
     BaseScheduler,
@@ -27,7 +28,6 @@ from axlearn.cloud.common.scheduler import (
     _recursively_to_dict,
     composite_reporter,
 )
-from axlearn.cloud.common.types import JobStateMetadata, ResourceMap
 from axlearn.common.config import ConfigOr, InstantiableConfig, config_for_function
 from axlearn.common.test_utils import TestCase
 
@@ -939,3 +939,7 @@ class TestJobScheduler(parameterized.TestCase):
                 mock_reporter_as_fn.assert_called_once()
             else:
                 mock_reporter_as_fn.assert_not_called()
+
+
+if __name__ == "__main__":
+    absltest.main()

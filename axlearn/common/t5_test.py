@@ -7,17 +7,15 @@ import os
 import jax
 import numpy as np
 import pytest
-import torch
 from absl import logging
 from absl.testing import absltest, parameterized
 from jax import numpy as jnp
 from jax.experimental import mesh_utils
 from jax.experimental.pjit import pjit
-from transformers.models.t5 import modeling_t5 as hf_t5
 
 from axlearn.common import t5, utils
 from axlearn.common.attention import TransformerLayer
-from axlearn.common.layers import RMSNorm
+from axlearn.common.golden import load_golden
 from axlearn.common.module import functional as F
 from axlearn.common.t5 import (
     T5Encoder,
@@ -27,13 +25,12 @@ from axlearn.common.t5 import (
     t5_transformer_stack_config,
 )
 from axlearn.common.test_utils import TestCase
-from axlearn.common.torch_utils import parameters_from_torch_layer
-from axlearn.common.utils import Tensor, as_tensor
 
 # pylint: disable=no-self-use
 
 
 testdata_dir = os.path.join(os.path.dirname(__file__), "../experiments/testdata")
+_MODULE_NAME = "axlearn.common.t5_test"
 
 
 def random_inputs_for_t5(
@@ -98,22 +95,6 @@ def random_inputs_for_t5(
         source=dict(input_ids=source_ids),
         target=dict(input_ids=target_ids),
         target_labels=target_labels,
-    )
-
-
-def prepare_hf_t5_inputs(
-    source_ids: Tensor, target_ids: Tensor, target_labels: Tensor, pad_token_id: int = 0
-) -> dict[str, torch.Tensor]:
-    input_ids = torch.as_tensor(np.asarray(source_ids).copy(), dtype=torch.int32)
-    attention_mask = (input_ids != pad_token_id).int()
-    labels = torch.as_tensor(np.asarray(target_labels).copy(), dtype=torch.long)
-    decoder_input_ids = torch.as_tensor(np.asarray(target_ids).copy(), dtype=torch.int32)
-    labels[labels <= 0] = -100
-    return dict(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        decoder_input_ids=decoder_input_ids,
-        labels=labels,
     )
 
 
@@ -190,7 +171,9 @@ class RelativePositionTest(TestCase):
     def test_buckets_against_t5x(self, bidirectional, seq_len):
         testcase = jnp.load(
             os.path.join(
-                testdata_dir, __name__, f"test_buckets_against_t5x_{bidirectional}_{seq_len}.npy"
+                testdata_dir,
+                _MODULE_NAME,
+                f"test_buckets_against_t5x_{bidirectional}_{seq_len}.npy",
             ),
             allow_pickle=True,
         ).item()
@@ -218,39 +201,22 @@ class T5EncoderTest(TestCase):
         self.assertFalse(layer_cfg.self_attention.attention.input_linear.layer.bias)
         self.assertFalse(layer_cfg.self_attention.attention.output_linear.bias)
         layer: T5Encoder = cfg.instantiate(parent=None)
-        t5_config = hf_t5.T5Config(
-            vocab_size=vocab_size,
-            d_model=model_dim,
-            d_kv=model_dim // num_heads,
-            d_ff=model_dim * 8 // 3,
-            num_layers=num_layers,
-            num_heads=num_heads,
-            dropout_rate=0,
-            layer_norm_epsilon=RMSNorm.default_config().eps,
-            feed_forward_proj="gated-gelu",
-            use_cache=False,
-        )
-        ref = hf_t5.T5EncoderModel(t5_config)
 
-        input_ids = [
-            [1, 2, 3, 4, 5, 0],
-            [1, 7, 8, 9, 0, 0],
-        ]
-        logging.info("input_ids=%s", input_ids)
-        is_padding = jnp.expand_dims(jnp.asarray(input_ids) == 0, -1).astype(jnp.float32)
-        test_outputs, ref_outputs = self._compute_layer_outputs(
-            test_layer=layer,
-            ref_layer=ref,
-            test_inputs=dict(input_ids=jnp.asarray(input_ids)),
-            ref_inputs=dict(
-                input_ids=torch.as_tensor(input_ids, dtype=torch.int32),
-                attention_mask=(torch.as_tensor(input_ids) != 0).int(),
-            ),
-            parameters_from_ref_layer=parameters_from_torch_layer,
+        golden = load_golden(_MODULE_NAME, "test_against_t5_encoder")
+
+        input_ids = jnp.asarray(golden["inputs"]["input_ids"])
+        is_padding = jnp.expand_dims(input_ids == 0, -1).astype(jnp.float32)
+
+        test_outputs, _ = F(
+            layer,
+            is_training=False,
+            prng_key=jax.random.PRNGKey(123),
+            state=golden["params"],
+            inputs=dict(input_ids=input_ids),
         )
         self.assertNestedAllClose(
             test_outputs * (1 - is_padding),
-            as_tensor(ref_outputs["last_hidden_state"]) * (1 - is_padding),
+            jnp.asarray(golden["outputs"]["last_hidden_state"]) * (1 - is_padding),
             atol=5e-6,
         )
 
@@ -279,72 +245,68 @@ class T5EncoderDecoderModelTest(TestCase):
         layer_cfg.feed_forward.vlog = 5
         cfg.decoder.relative_pos_emb.vlog = 5
         layer: T5EncoderDecoderModel = cfg.instantiate(parent=None)
-        if arch == "t5-v1":
-            d_ff = 4 * model_dim
-            feed_forward_proj = "relu"
-        elif arch == "t5-v1-1":
-            d_ff = model_dim * 8 // 3
-            feed_forward_proj = "gated-gelu"
-        elif arch == "t5-ul2":
-            d_ff = model_dim * 8 // 3
-            # Ref: https://huggingface.co/google/ul2/blob/main/config.json#L13.
-            feed_forward_proj = "gated-silu"
-        else:
-            raise ValueError(f"unsupported t5 arch {arch}")
-        t5_config = hf_t5.T5Config(
-            vocab_size=vocab_size,
-            d_model=model_dim,
-            d_kv=model_dim // num_heads,
-            d_ff=d_ff,
-            num_layers=num_layers,
-            num_heads=num_heads,
-            dropout_rate=0,
-            feed_forward_proj=feed_forward_proj,
-            use_cache=False,
-            tie_word_embeddings=False,
+
+        golden = load_golden(_MODULE_NAME, f"test_against_t5_encoder_decoder_model_{arch}")
+
+        # Use golden inputs for the axlearn model.
+        source_ids = jnp.asarray(golden["inputs"]["source_ids"])
+        target_ids = jnp.asarray(golden["inputs"]["target_ids"])
+        target_labels = jnp.asarray(golden["inputs"]["target_labels"])
+
+        test_inputs = dict(
+            source=dict(input_ids=source_ids),
+            target=dict(input_ids=target_ids),
+            target_labels=target_labels,
         )
-        ref = hf_t5.T5ForConditionalGeneration(t5_config)
-        test_inputs = random_inputs_for_t5(
-            source_length=64,
-            target_length=64,
-            source_vocab_size=vocab_size,
-            target_vocab_size=vocab_size,
+
+        params = golden["params"]
+
+        (test_loss, test_aux), _ = F(
+            layer,
+            is_training=False,
+            prng_key=jax.random.PRNGKey(123),
+            state=params,
+            inputs=dict(input_batch=test_inputs, return_aux=True),
         )
-        ref_inputs = prepare_hf_t5_inputs(
-            source_ids=test_inputs["source"]["input_ids"],
-            target_ids=test_inputs["target"]["input_ids"],
-            target_labels=test_inputs["target_labels"],
+
+        # Compute logits separately.
+        test_logits, _ = F(
+            layer.decoder,
+            prng_key=jax.random.PRNGKey(123),
+            state=params["decoder"],
+            inputs=dict(forward_outputs=test_aux),
+            is_training=False,
+            method="compute_logits",
         )
-        (test_loss, test_aux), ref_outputs = self._compute_layer_outputs(
-            test_layer=layer,
-            ref_layer=ref,
-            test_inputs=dict(
-                input_batch=test_inputs,
-                return_aux=True,
-            ),
-            ref_inputs=ref_inputs,
-            parameters_from_ref_layer=parameters_from_torch_layer,
-        )
+
         # Ignore out-of-class labels, as well as padding (0) labels.
         self.assertEqual(cfg.encoder.pad_token_id, 0)
         self.assertEqual(cfg.decoder.pad_token_id, 0)
         target_label_mask = jnp.logical_and(
-            0 < test_inputs["target_labels"],
-            test_inputs["target_labels"] < vocab_size,
+            0 < target_labels,
+            target_labels < vocab_size,
         )
         self.assertNestedAllClose(
-            test_aux["logits"] * target_label_mask[:, :, None],
-            as_tensor(ref_outputs.logits) * target_label_mask[:, :, None],
+            test_logits * target_label_mask[:, :, None],
+            jnp.asarray(golden["outputs"]["ref_logits"]) * target_label_mask[:, :, None],
             atol=1e-4,
         )
-        self.assertNestedAllClose(test_loss, as_tensor(ref_outputs.loss))
+        self.assertNestedAllClose(test_loss, jnp.asarray(golden["outputs"]["ref_loss"]))
 
     def test_pjit(self):
         # A simple test to ensure a train step does not leak tracers.
         mesh_shape = (1, 1)
         mesh_axes = ("data", "model")
         devices = mesh_utils.create_device_mesh(mesh_shape)
-        with jax.checking_leaks(), jax.sharding.Mesh(devices, mesh_axes):
+        # numeric_checks(False): the file's __main__ enables numeric_checks(True),
+        # but check_numerics calls bool() on a JAX array — invalid inside the
+        # pjit'd train_step (TracerBoolConversionError). Disable just for this
+        # test; other tests in this file run eagerly and are unaffected.
+        with (
+            jax.checking_leaks(),
+            jax.sharding.Mesh(devices, mesh_axes),
+            utils.numeric_checks(False),
+        ):
             vocab_size = 6
             cfg: T5EncoderDecoderModel.Config = t5_encoder_decoder_config(
                 vocab_size=vocab_size,
@@ -427,7 +389,10 @@ class OneHotGatherTest(TestCase):
 
     @parameterized.parameters([10, 100, 1000, 10000])
     # TODO(markblee): Re-enable in CI when we have access to a larger instance.
+    # absltest ignores @pytest.mark.high_cpu; @absltest.skip ensures bazel-test-cpu
+    # also skips to avoid OOM at size=10000 (~1.2GB fp32).
     @pytest.mark.high_cpu
+    @absltest.skip("high_cpu: size=10000 OOMs RBE worker")
     def test_one_hot_against_all_gather(self, size):
         batch_size = 8
 

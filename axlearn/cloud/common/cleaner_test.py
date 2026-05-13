@@ -6,7 +6,7 @@ import datetime
 from collections.abc import Sequence
 from unittest import mock
 
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
 
 from axlearn.cloud.common.bastion import new_jobspec
 from axlearn.cloud.common.cleaner import (
@@ -15,9 +15,9 @@ from axlearn.cloud.common.cleaner import (
     CompositeCleaner,
     UnschedulableCleaner,
 )
+from axlearn.cloud.common.job_types import JobSpec
 from axlearn.cloud.common.quota import QuotaInfo
 from axlearn.cloud.common.scheduler import BaseScheduler, JobMetadata, JobScheduler, JobVerdict
-from axlearn.cloud.common.types import JobSpec
 from axlearn.common.config import REQUIRED, Required, config_class, config_for_function
 
 
@@ -213,3 +213,7 @@ class UnschedulableCleanerTest(parameterized.TestCase):
 
         # Should return the job since it has over_limits
         self.assertSequenceEqual(result, ["test_job"])
+
+
+if __name__ == "__main__":
+    absltest.main()

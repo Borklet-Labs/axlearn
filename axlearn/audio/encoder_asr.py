@@ -21,9 +21,10 @@ from axlearn.common.attention import RepeatedTransformerLayer, SinusoidalPositio
 from axlearn.common.base_layer import BaseLayer
 from axlearn.common.config import REQUIRED, Required, config_class
 from axlearn.common.conformer import RepeatedConformerLayer
+from axlearn.common.convolution import Conv1DWithPadding
 from axlearn.common.ein_ops import rearrange
 from axlearn.common.layers import Dropout, Linear
-from axlearn.common.module import Module
+from axlearn.common.module import Module, nowrap
 from axlearn.common.utils import Nested, Tensor, safe_not
 
 
@@ -139,7 +140,9 @@ class SpeechContextNetwork(BaseLayer):
         # Dropout applied after projection.
         dropout: Dropout.Config = Dropout.default_config()
         # Positional embeddings.
-        pos_emb: BaseLayer.Config = SinusoidalPositionalEmbedding.default_config()
+        pos_emb: Optional[BaseLayer.Config] = SinusoidalPositionalEmbedding.default_config()
+        # Post Convolution downsample
+        post_downsample: Optional[Conv1DWithPadding.Config] = None
         # Context layers, e.g. a conformer stack.
         context: BaseLayer.Config = RepeatedConformerLayer.default_config()
 
@@ -150,8 +153,14 @@ class SpeechContextNetwork(BaseLayer):
             "input_linear", cfg.input_linear.set(input_dim=cfg.input_dim, output_dim=cfg.output_dim)
         )
         self._add_child("dropout", cfg.dropout)
-        self._add_child("pos_emb", cfg.pos_emb.set(dim=cfg.output_dim))
+        if cfg.pos_emb is not None:
+            self._add_child("pos_emb", cfg.pos_emb.set(dim=cfg.output_dim))
         self._add_child("context", cfg.context.set(input_dim=cfg.output_dim))
+        if cfg.post_downsample is not None:
+            self._add_child(
+                "post_downsample",
+                cfg.post_downsample.set(input_dim=cfg.output_dim, output_dim=cfg.output_dim),
+            )
 
     def forward(self, inputs: Tensor, *, segment_ids: Tensor) -> dict[str, Tensor]:
         """Computes context features.
@@ -172,7 +181,8 @@ class SpeechContextNetwork(BaseLayer):
 
         if isinstance(cfg.context, RepeatedConformerLayer.Config):
             positions = _segment_relative_positions(segment_ids)
-            x = x + self.pos_emb(positions)
+            if cfg.pos_emb is not None:
+                x = x + self.pos_emb(positions)
             x = self.context(inputs=x, segment_ids=segment_ids)
         elif isinstance(cfg.context, RepeatedTransformerLayer.Config):
             # We don't need to do add pos_emb for transformer block
@@ -188,6 +198,9 @@ class SpeechContextNetwork(BaseLayer):
             activations=x,
             activation_paddings=segment_ids == 0,
         )
+        if cfg.post_downsample is not None:
+            x, _ = self.post_downsample(x=x, paddings=segment_ids == 0)
+            segment_ids = self.post_downsample.conv_paddings(segment_ids)
         return dict(outputs=x * (segment_ids != 0)[..., None], segment_ids=segment_ids)
 
 
@@ -246,6 +259,7 @@ class ASREncoder(BaseLayer):
         )
         return context_features
 
+    @nowrap
     def init_states(self, *, batch_size: int, dtype: jnp.dtype) -> Nested[Tensor]:
         """Initializes empty cached states for decoding.
 
@@ -256,7 +270,11 @@ class ASREncoder(BaseLayer):
         return dict()
 
     def extend_step(
-        self, *, cached_states: Nested[Tensor], input_data: Nested[Tensor]
+        self,
+        *,
+        cached_states: Nested[Tensor],
+        input_data: Nested[Tensor],
+        is_prefill: bool = False,
     ) -> tuple[Nested[Tensor], Nested[Tensor]]:
         """Computes encoder outputs for the given input batch.
 
@@ -266,10 +284,12 @@ class ASREncoder(BaseLayer):
             cached_states: Unused cached states (always empty dict).
             input_data: A dict with `x` [BT] and `paddings` [BT] field. `T` must be multiple of
                 time stride.
+            is_prefill: Unused. Accepted for API compatibility with causal encoders.
 
         Returns:
             A tuple of (cached_states, outputs).
         """
+        del is_prefill
         segment_ids = safe_not(input_data["paddings"]).astype(jnp.int32)
         fwd_outputs = self.forward(inputs=input_data["x"], segment_ids=segment_ids)
         outputs = dict(x=fwd_outputs["outputs"], paddings=fwd_outputs["segment_ids"] == 0)

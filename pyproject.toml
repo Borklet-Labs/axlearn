@@ -23,12 +23,11 @@ core = [
     "absl-py==2.3.1",
     "chex==0.1.91",
     "etils[epy]==1.13.0",  # pin to ensure importlib-resources is installed (needed by tensorflow-datasets)
-    "importlab==0.8.1",  # breaks pytype on 0.8
     "jax==0.10.0",
     "jaxlib==0.10.0",
     "ml-dtypes==0.5.4",
     "msgpack==1.1.0",  # for checkpointing.
-    "nltk==3.7",  # for text preprocessing
+    "nltk==3.9.2",  # for text preprocessing
     "optax==0.2.6",  # Fix for TPU 7x
     "portpicker",
     "pyarrow>=22.0.0",  # pyarrow < 22.0.0 has protobuf conflicts
@@ -63,7 +62,6 @@ dev = [
     "pytest",  # test runner
     "pytest-xdist",  # pytest plugin for test parallelism
     "pytest-timeout",  # pytest plugin for forcing timeout of tests
-    "pytype==2024.10.11",  # type checking
     "scikit-learn==1.6.1",  # test-only
     # Fix AttributeError: module 'scipy.linalg' has no attribute 'tril' and related scipy import errors.
     "scipy>=1.12.0",
@@ -93,7 +91,7 @@ gcp = [
     "google-cloud-compute==1.47.0", # Needed for region discovery for CloudBuild API access.
     "google-cloud-core==2.3.3",
     "google-cloud-build==3.36.0",
-    "ml-goodput-measurement==0.0.15",
+    "ml-goodput-measurement==0.0.16",
     "pika==1.3.2",  # used by event queue
     "pyOpenSSL>=22.1.0",  # compat with cryptography version.
     "tpu-info==0.2.0", # For TPU monitoring from libtpu. https://github.com/AI-Hypercomputer/cloud-accelerator-diagnostics/tree/main/tpu_info
@@ -168,9 +166,6 @@ version.fallback-version = "0.0.0"
 build.targets.wheel.exclude = ["**/BUILD", "axlearn/experiments/testdata"]
 # This is where the code is for historical reasons.
 build.targets.wheel.packages = ["axlearn"]
-
-[tool.pytype]
-inputs = ["axlearn"]
 
 [project.scripts]
 # Entrypoint for CLI.

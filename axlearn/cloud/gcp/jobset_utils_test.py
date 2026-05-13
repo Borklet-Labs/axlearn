@@ -12,7 +12,7 @@ from typing import Optional
 from unittest import mock
 
 from absl import flags
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
 
 from axlearn.cloud.common.bastion import (
     _BASTION_SERIALIZED_JOBSPEC_ENV_VAR,
@@ -22,8 +22,8 @@ from axlearn.cloud.common.bastion import (
     serialize_jobspec,
 )
 from axlearn.cloud.common.bundler import Bundler
+from axlearn.cloud.common.job_types import JobMetadata
 from axlearn.cloud.common.pod_mutator import PodMutator
-from axlearn.cloud.common.types import JobMetadata
 from axlearn.cloud.common.utils import AcceleratorConfig, define_flags, from_flags
 from axlearn.cloud.gcp import bundler, jobset_utils
 from axlearn.cloud.gcp.bundler import ArtifactRegistryBundler, CloudBuildBundler
@@ -424,6 +424,10 @@ class TPUReplicatedJobTest(TestCase):
             self.assertIn("gsutil -m rsync -r /output", sync_command)
             self.assertIn("$HOSTNAME", sync_command)
             self.assertIn("sleep", sync_command)
+            # Verify SIGTERM handler performs a final sync before exiting.
+            self.assertIn("trap", sync_command)
+            self.assertIn("TERM", sync_command)
+            self.assertIn("exit 0", sync_command)
 
             if enable_pre_provisioner:
                 self.assertIn(PRE_PROVISIONER_LABEL, node_selector)
@@ -1001,3 +1005,7 @@ class TopologyAssignmentTest(TestCase):
             annotations = composite.get_workload_annotations()
             # Both children contribute; annotations will be merged (last wins for same key)
             self.assertIn("tpu-provisioner.cloud.google.com/slice-selection", annotations)
+
+
+if __name__ == "__main__":
+    absltest.main()

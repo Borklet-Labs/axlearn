@@ -72,6 +72,7 @@ class LConvLayer(BaseLayer):
         """Configures LConvLayer."""
 
         input_dim: Required[int] = REQUIRED  # Input feature dim.
+        num_input_dim_groups: Optional[int] = None  # Num input groups for conv.
         linear1_norm: LayerNorm.Config = LayerNorm.default_config()
         linear1_activation: tuple[str, str] = ("linear", "nn.sigmoid")
         linear1: Linear.Config = Linear.default_config().set(bias=True)
@@ -100,12 +101,14 @@ class LConvLayer(BaseLayer):
             )
 
         # Setup Depthwise Convolution (3 dims are same).
+        if cfg.num_input_dim_groups is None:
+            cfg.num_input_dim_groups = cfg.input_dim
         self._add_child(
             "conv",
             cfg.conv.set(
                 input_dim=cfg.input_dim,
                 output_dim=cfg.input_dim,
-                num_input_dim_groups=cfg.input_dim,
+                num_input_dim_groups=cfg.num_input_dim_groups,
             ),
         )
         self._add_child("conv_norm", cfg.conv_norm.set(input_dim=cfg.input_dim))
@@ -128,10 +131,13 @@ class LConvLayer(BaseLayer):
         cfg = self.config
         chex.assert_type(segment_ids, jnp.int32)
         x = self.linear1_norm(inputs)
-        activations = [
-            get_activation_fn(activation)(self.children[f"linear1_{i}"](x))
-            for i, activation in enumerate(cfg.linear1_activation)
-        ]
+        # Remat refer to axlearn.common.attention.TransformerFeedForwardLayer
+        activations = []
+        for i, activation in enumerate(cfg.linear1_activation):
+            x_i = self.children[f"linear1_{i}"](x)
+            x_i = self._remat_name(x_i, f"linear1_{i}")
+            x_i = get_activation_fn(activation)(x_i)
+            activations.append(x_i)
         assert len(activations) == 2, cfg.linear1_activation
         x = activations[0] * activations[1]
         # We need to clear padded positions in 'x' before feeding into `conv` to ensure padding
@@ -141,6 +147,7 @@ class LConvLayer(BaseLayer):
         x = self.conv_norm(x, segment_ids=segment_ids)
         x = get_activation_fn(cfg.conv_activation)(x)
         x = self.linear2(x)
+        x = self._remat_name(x, "linear2")
         x = self.dropout(x)
         return (x + inputs) * mask
 
@@ -236,14 +243,44 @@ class ConformerLayer(BaseLayer):
         return x * rearrange(segment_ids != 0, "b t -> b t 1")
 
 
-def set_lconv_partition_spec(
+def set_lconv_partition_specs(
     cfg: LConvLayer.Config,
+    *,
     batch_axis_names: Union[str, Sequence[str]] = ("data", "fsdp"),
+    fsdp_axis_names: Union[str, Sequence[str]] = "fsdp",
     tp_axis_names: Union[str, Sequence[str], None] = "model",
+    seq_axis_names: Union[str, Sequence[str]] = "seq",
 ):
-    """Sets `cfg` to shard LConv over fdsp, dp and model axes."""
-    cfg.conv.input_partition_spec = (batch_axis_names, None, tp_axis_names)
-    cfg.conv.output_partition_spec = (batch_axis_names, None, tp_axis_names)
+    """Sets `cfg` to shard LConvLayer weights over both fsdp and tp axes.
+    Lightweight conv layer.
+    architecture::
+      input
+      |   |
+      |   linear1_norm(.)         # input_dim, (batch, seq, tp)
+      |   linear1(.)              # input_dim, (batch, seq, tp)
+      |   linear1_activation(.)   # requires tensor commuication
+      |   conv(.)                 # depthwise 1D conv fully supports tensor parallelism
+      |   conv_norm(.)            # no tensor communication needed
+      |   conv_activation(.)
+      |   linear2(.)              # (batch, seq, tp)
+      |   dropout(.)              # requires tensor commuication
+      |   |
+        +
+        |
+      output
+
+    Args:
+        cfg: A LConvLayer layer config to apply sharding spec to.
+        **kwargs: See `set_double_shard_weights_config`.
+    """
+    # Encourage the right activation sharding.
+    cfg.linear1.param_partition_spec = (fsdp_axis_names, tp_axis_names)
+    cfg.linear2.param_partition_spec = (tp_axis_names, fsdp_axis_names)
+    cfg.linear1.output_partition_spec = (batch_axis_names, seq_axis_names, tp_axis_names)
+    cfg.linear2.output_partition_spec = (batch_axis_names, seq_axis_names, tp_axis_names)
+    cfg.conv.input_partition_spec = (batch_axis_names, seq_axis_names, tp_axis_names)
+    cfg.conv.output_partition_spec = (batch_axis_names, seq_axis_names, tp_axis_names)
+    # Depthwise uses (window_size, 1, input_dim) weights, no FSDP sharding.
     cfg.conv.param_partition_spec = (None, None, tp_axis_names)
 
 
@@ -270,6 +307,7 @@ def set_double_shard_weights_config(
         cfg.self_attention.attention,
         fsdp_axis_names=fsdp_axis_names,
         tp_axis_names=tp_axis_names,
+        seq_axis_names=seq_axis_names,
     )
     set_feed_forward_partition_specs(
         cfg.ff_start,
@@ -285,10 +323,12 @@ def set_double_shard_weights_config(
         tp_axis_names=tp_axis_names,
         seq_axis_names=seq_axis_names,
     )
-    set_lconv_partition_spec(
+    set_lconv_partition_specs(
         cfg.lconv,
         batch_axis_names=batch_axis_names,
+        fsdp_axis_names=fsdp_axis_names,
         tp_axis_names=tp_axis_names,
+        seq_axis_names=seq_axis_names,
     )
 
 
