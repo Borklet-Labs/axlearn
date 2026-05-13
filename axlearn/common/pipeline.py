@@ -27,6 +27,7 @@ import dataclasses
 import functools
 from typing import Callable, NamedTuple, Optional, Protocol, Union
 
+import jax
 from jax import checkpoint
 from jax import numpy as jnp
 from jax.sharding import PartitionSpec

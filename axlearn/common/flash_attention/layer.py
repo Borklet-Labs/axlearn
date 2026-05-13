@@ -126,10 +126,16 @@ class FlashAttention(GroupedQueryAttention):
             from jax.interpreters.pxla import thread_resources
             global_mesh = thread_resources.env.physical_mesh
             
-        if len(global_mesh.devices):
-            backend = global_mesh.devices.flat[0].platform
-        else:
-            # Fall back to jax.default_backend() if no device is found in physical_mesh.
+        try:
+            if len(global_mesh.devices) > 0:
+                first_device = global_mesh.devices.flat[0]
+                if first_device is not None:
+                    backend = first_device.platform
+                else:
+                    backend = jax.default_backend()
+            else:
+                backend = jax.default_backend()
+        except TypeError:
             backend = jax.default_backend()
         return backend
 
