@@ -28,7 +28,6 @@ from enum import Enum, unique
 from typing import NamedTuple, Optional, Union
 
 import jax
-import jax.ad_checkpoint
 from jax import numpy as jnp
 from jax.sharding import PartitionSpec
 
