@@ -99,7 +99,6 @@ from collections.abc import Sequence
 from typing import Any, Callable, Optional, Union
 
 import jax
-import jax.ad_checkpoint
 from absl import logging
 from jax import numpy as jnp
 
@@ -794,7 +793,7 @@ class BaseLayer(Module):
             Tagged x.
         """
         full_name = f"{type(self).__name__}.{name}"
-        return jax.ad_checkpoint.checkpoint_name(x, full_name)
+        return jax.checkpoint_name(x, full_name)
 
     @property
     def parameters(self):
