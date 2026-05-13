@@ -31,7 +31,7 @@ core = [
     "nltk==3.7",  # for text preprocessing
     "optax==0.2.6",  # Fix for TPU 7x
     "portpicker",
-    "pyarrow<21.0.0",  # Pin to v20.x to avoid PyExtensionType -> ExtensionType breaking change in v21
+    "pyarrow>=22.0.0",  # pyarrow < 22.0.0 has protobuf conflicts
     "protobuf>=6,<7",  # Match the protobuf version used by TensorFlow
     "tensorboard==2.20",  # As of TensorFlow 2.21 installing TensorBoard is required
     "tensorboard-plugin-profile==2.22.1",
@@ -87,7 +87,7 @@ gcp = [
     "kubernetes==31.0.0",
     "google-api-core==2.30.3",
     "google-api-python-client==2.109.0",
-    "google-auth==2.29.0",
+    "google-auth>=2.29.0,<3",
     "google-auth[pyopenssl]",  # Ensures that we have compatible pyopenssl/cryptography pins.
     "google-cloud-storage==2.19.0",
     "google-cloud-compute==1.47.0", # Needed for region discovery for CloudBuild API access.
@@ -120,7 +120,7 @@ vertexai_tensorboard = [
 ]
 # Dataflow dependencies.
 dataflow = [
-    "pyarrow<21.0.0",  # Pin to v20.x to avoid PyExtensionType -> ExtensionType breaking change in v21
+    "pyarrow>=22.0.0",
     "apache-beam==2.69.0",
     "apache-beam[gcp]",
     "google-apitools",  # for beam pipeline
