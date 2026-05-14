@@ -1966,13 +1966,11 @@ def create_device_mesh(
     # <https://github.com/google/jax/blob/b81b79c1b0d2ec/jax/experimental/mesh_utils.py#L313>
     device_platform = devices[0].platform
 
-    print(f"Devices before granule calculation: {devices}")
     device_attr = "process_index" if device_platform != "tpu" else "slice_index"
     is_multi_granule_env = hasattr(devices[0], device_attr)
     if not all(el.platform == device_platform for el in devices):
         raise NotImplementedError(f"Not all devices had platform: {device_platform}.")
-    print("IS MULTI GRANULE by camilo: {is_multi_granule_env}")
-    print(f"Granule devices: {[getattr(el, device_attr) for el in devices.flatten()]} + 1, by camilo")
+    print("is multi_granule env by camilo: {is_multi_granule_env}")
     num_granules = (
         len({getattr(el, device_attr) for el in devices.flatten()})  if is_multi_granule_env else 1
     )
