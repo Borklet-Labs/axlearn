@@ -13,12 +13,14 @@ See c4_trainer.py for how they are used.
 import math
 from collections.abc import Sequence
 from typing import Literal, Optional, Protocol, Union
+import os
 
 import jax.numpy as jnp
 import tensorflow as tf
 from jax.sharding import PartitionSpec
 
-from axlearn.common import (  # input_base,
+from axlearn.common import (
+    input_base,
     base_model,
     causal_lm,
     elastic_input,
@@ -70,6 +72,10 @@ from axlearn.experiments.text.common import DataMixtureComponent, tfds_text_sour
 
 REPLACE_NEWLINES_WITH = "<n>"
 EVAL_EVERY_N_STEPS = 5_000
+
+# Env variables to control Elastic training functionality
+ENABLED_PAUSE_RESUME = os.environ['ENABLED_PAUSE_RESUME'] if "ENABLED_PAUSE_RESUME" in os.environ else False
+ENABLED_REPLICA_RESIZE = os.environ['ENABLED_REPLICA_RESIZE'] if "ENABLED_REPLICA_RESIZE" in os.environ else False
 
 
 # We typically use bfloat16 as the step dtype,
@@ -731,66 +737,63 @@ def get_trainer_config_fn(
         cfg.max_step = max_step
         cfg.train_dtype = STEP_DTYPE
 
-        # # Configure input dispatcher using SpmdInputDispatcher.
-        # train_dispatcher_cfg = SpmdInputDispatcher.default_config().set(
-        #     global_logical_batch_size=train_batch_size,
-        #     partition_spec=PartitionSpec(("data", "expert", "fsdp")),
-        # )
+        # Use ElasticSpmdInputDispatcher class if elastic training enabled.
+        enabled_elastic_training = True if ENABLED_PAUSE_RESUME or ENABLED_REPLICA_RESIZE else False
+        if enabled_elastic_training:
+          ### Configure elastic training dispatcher and input #####
+          train_dispatcher_cfg = elastic_input.ElasticSpmdInputDispatcher.default_config().set(
+              global_logical_batch_size=train_batch_size,
+              num_max_slices=2,
+          )
 
-        # cfg.input = input_tf_data.Input.default_config().set(
-        #     is_training=True,
-        #     source=train_input_source,
-        #     input_dispatcher=train_dispatcher_cfg,
-        #     processor=config_for_function(input_tf_data.identity),
-        #     batcher=config_for_function(input_tf_data.per_feed_batch).set(
-        #         prefetch_buffer_size=tf.data.AUTOTUNE,
-        #         pad_example_fn=input_tf_data.default_pad_example_fn,
-        #     ),
-        #     input_partitioner=config_for_function(input_base.partition_by_path_rank).set(
-        #         path_rank_to_partition={
-        #             # Note: the batch axes are different here than in `cfg.batch_axis_names`,
-        #             # as we partition sequence dim over `seq`.
-        #             (None, 1): PartitionSpec(("data", "expert", "fsdp")),
-        #             (None, 2): PartitionSpec(("data", "expert", "fsdp"), "seq"),
-        #         }
-        #     ),
-        # )
+          cfg.input = elastic_input.ElasticInput.default_config().set(
+              input=input_tf_data.Input.default_config().set(
+                  source=train_input_source,
+                  input_dispatcher=train_dispatcher_cfg,
+                  processor=config_for_function(input_tf_data.identity),
+                  batcher=config_for_function(input_tf_data.per_feed_batch).set(
+                      is_training=True,
+                      prefetch_buffer_size=tf.data.AUTOTUNE,
+                      pad_example_fn=input_tf_data.default_pad_example_fn,
+                  ),
+                  # input_partitioner=config_for_function(input_base.partition_by_path_rank).set(
+                  #     path_rank_to_partition={
+                  #         # Note: the batch axes are different here than in `cfg.batch_axis_names`,
+                  #         # as we partition sequence dim over `seq`.
+                  #         (None, 1): PartitionSpec(("data", "expert", "fsdp")),
+                  #         (None, 2): PartitionSpec(("data", "expert", "fsdp"), "seq"),
+                  #     }
+                  # ),
+                  is_training=True,
+                  partition_spec=PartitionSpec(("data", "expert", "fsdp")),
+              ),
+          )
+        else:
+          # Configure input dispatcher using SpmdInputDispatcher.
+          train_dispatcher_cfg = SpmdInputDispatcher.default_config().set(
+              global_logical_batch_size=train_batch_size,
+              partition_spec=PartitionSpec(("data", "expert", "fsdp")),
+          )
 
-        #### Configure elastic training dispatcher and input #####
-
-        # train_dispatcher_cfg = SpmdInputDispatcher.default_config().set(
-        #     global_logical_batch_size=train_batch_size,
-        #     partition_spec=PartitionSpec(("data", "expert", "fsdp")),
-        # )
-
-        train_dispatcher_cfg = elastic_input.ElasticSpmdInputDispatcher.default_config().set(
-            global_logical_batch_size=train_batch_size,
-            num_max_slices=2,
-        )
-
-        cfg.input = elastic_input.ElasticInput.default_config().set(
-            input=input_tf_data.Input.default_config().set(
-                source=train_input_source,
-                input_dispatcher=train_dispatcher_cfg,
-                processor=config_for_function(input_tf_data.identity),
-                batcher=config_for_function(input_tf_data.per_feed_batch).set(
-                    is_training=True,
-                    prefetch_buffer_size=tf.data.AUTOTUNE,
-                    pad_example_fn=input_tf_data.default_pad_example_fn,
-                ),
-                # input_partitioner=config_for_function(input_base.partition_by_path_rank).set(
-                #     path_rank_to_partition={
-                #         # Note: the batch axes are different here than in `cfg.batch_axis_names`,
-                #         # as we partition sequence dim over `seq`.
-                #         (None, 1): PartitionSpec(("data", "expert", "fsdp")),
-                #         (None, 2): PartitionSpec(("data", "expert", "fsdp"), "seq"),
-                #     }
-                # ),
-                is_training=True,
-                partition_spec=PartitionSpec(("data", "expert", "fsdp")),
-            ),
-        )
-        print("train_batch_size by lkolluru: ", train_batch_size)
+          cfg.input = input_tf_data.Input.default_config().set(
+              is_training=True,
+              source=train_input_source,
+              input_dispatcher=train_dispatcher_cfg,
+              processor=config_for_function(input_tf_data.identity),
+              batcher=config_for_function(input_tf_data.per_feed_batch).set(
+                  prefetch_buffer_size=tf.data.AUTOTUNE,
+                  pad_example_fn=input_tf_data.default_pad_example_fn,
+              ),
+              input_partitioner=config_for_function(input_base.partition_by_path_rank).set(
+                  path_rank_to_partition={
+                      # Note: the batch axes are different here than in `cfg.batch_axis_names`,
+                      # as we partition sequence dim over `seq`.
+                      (None, 1): PartitionSpec(("data", "expert", "fsdp")),
+                      (None, 2): PartitionSpec(("data", "expert", "fsdp"), "seq"),
+                  }
+              ),
+          )
+        print("train_batch_size by camilo: ", train_batch_size)
 
         cfg.evalers = {}
         for name, evaler_cfg in evalers.items():

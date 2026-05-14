@@ -146,13 +146,11 @@ def get_trainer_config(
     trainer_config: SpmdTrainer.Config = trainer_config_fn()
     trainer_config.dir = trainer_config.dir or flag_values.trainer_dir
 
-    print(f"Trainer Config Dir: {trainer_config.dir} by Camilo")
     if flag_values.mesh_selector is not None:
         select_mesh_config(trainer_config, mesh_selector=flag_values.mesh_selector)
     trainer_config.mesh_axis_names = trainer_config.mesh_axis_names or ("data", "model")
     # trainer_config.mesh_shape = trainer_config.mesh_shape or (len(jax.devices()), 1)
 
-    print("Live devices ", live_devices())
     if len(live_devices()) == 32:
       trainer_config.mesh_shape = trainer_config.mesh_shape or (len(live_devices()), 1)
     if len(live_devices()) == 16:
