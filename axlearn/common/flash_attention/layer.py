@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from absl import logging
-from jax.sharding import PartitionSpec, get_mesh
+from jax.sharding import PartitionSpec
 
 from axlearn.common.attention import Dropout, ForwardMode, GroupedQueryAttention, KVState
 from axlearn.common.attention_bias import BaseAttentionBias
@@ -121,21 +121,18 @@ class FlashAttention(GroupedQueryAttention):
 
     def _backend(self):
         # For compatibility with AOT compilation, we obtain the backend type from physical_mesh.
-        global_mesh = get_mesh()
-        if global_mesh is None or not hasattr(global_mesh, "devices") or global_mesh.devices is None:
-            from jax.interpreters.pxla import thread_resources
-            global_mesh = thread_resources.env.physical_mesh
-            
-        try:
-            if len(global_mesh.devices) > 0:
-                first_device = global_mesh.devices.flat[0]
-                if first_device is not None:
-                    backend = first_device.platform
-                else:
-                    backend = jax.default_backend()
+        global_mesh = get_current_abstract_or_physical_mesh()
+
+        if hasattr(global_mesh, "devices") and global_mesh.devices is not None and np.size(global_mesh.devices) > 0:
+            first_device = global_mesh.devices.flat[0]
+            if first_device is not None:
+                backend = first_device.platform
             else:
                 backend = jax.default_backend()
-        except TypeError:
+        elif hasattr(global_mesh, "device_kind") and global_mesh.device_kind is not None:
+            backend = global_mesh.device_kind
+        else:
+            # Fall back to jax.default_backend() if no device is found.
             backend = jax.default_backend()
         return backend
 
@@ -147,10 +144,7 @@ class FlashAttention(GroupedQueryAttention):
         """Repeats key or value heads dim to be shardable."""
         cfg: FlashAttention.Config = self.config
         partition_spec = cfg.mha_dim_to_partition_spec["bsnh"]
-        global_mesh = get_mesh()
-        if global_mesh is None or not hasattr(global_mesh, "shape") or not global_mesh.shape:
-            from jax.interpreters.pxla import thread_resources
-            global_mesh = thread_resources.env.physical_mesh
+        global_mesh = get_current_abstract_or_physical_mesh()
             
         if (
             partition_spec == PartitionSpec(None)
@@ -295,10 +289,7 @@ class FlashAttention(GroupedQueryAttention):
         sharded_axes = jax.tree.flatten(sharded_axes)[0]
         prng_key_partition_spec = PartitionSpec(sharded_axes) if sharded_axes else PartitionSpec()
         # Pre-split PRNG key to ensure unique randomness across sharded devices
-        global_mesh = get_mesh()
-        if global_mesh is None or not hasattr(global_mesh, "shape") or not global_mesh.shape:
-            from jax.interpreters.pxla import thread_resources
-            global_mesh = thread_resources.env.physical_mesh
+        global_mesh = get_current_abstract_or_physical_mesh()
             
         prepared_prng_key = split_prng_keys_for_shard_map(
             self.dropout.get_prng_key(), prng_key_partition_spec, global_mesh
