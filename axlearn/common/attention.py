@@ -82,6 +82,7 @@ from typing import Any, Callable, NamedTuple, Optional, Protocol, Sequence, Unio
 import jax
 from absl import logging
 from jax import numpy as jnp
+from jax.sharding import NamedSharding, PartitionSpec
 from jax._src.mesh import get_abstract_mesh, thread_resources
 
 from axlearn.common import param_init
@@ -497,8 +498,13 @@ class BaseMultiheadLinear(DenseGeneralBaseLayer):
 
     def forward(self, inputs: Tensor) -> Tensor:
         params = self.parameters
+        out_sharding = None
+        if self._einsum_expr == "btnh,dnh->btd":
+            mesh = get_abstract_mesh()
+            if not mesh.empty:
+                out_sharding = NamedSharding(mesh, PartitionSpec(None, None, None))
         outputs = self.einsum_maybe_quantized(
-            self._einsum_expr, activation=inputs, kernel=params["weight"]
+            self._einsum_expr, activation=inputs, kernel=params["weight"], out_sharding=out_sharding
         )
         return outputs + params.get("bias", 0)
 
@@ -2090,7 +2096,7 @@ class MultiheadAttention(BaseLayer):
         if not cfg.scale_kv_before_cache_update:
             # This is to maintain the existing behavior of sending pre-scaled K to the next layer.
             kv_state = kv_state._replace(k_proj=k_proj)
-        self.vlog(3, "atten.prob=%s", probs[0, 0, 0, :])
+        self.vlog(3, "atten.prob=%s", probs.mean())
         self.vlog(3, "atten.context=%s", context.sum())
 
         # [batch, target_length, output_dim].
@@ -2150,7 +2156,7 @@ class MultiheadAttention(BaseLayer):
         k_proj, v_proj = k_proj.astype(q_proj.dtype), v_proj.astype(q_proj.dtype)
         logits = self._compute_logits(q_proj, k_proj)
         logits = self._cap_logits(logits)
-        self.vlog(3, "atten.logits=%s", logits[0, 0, 0, :])
+        self.vlog(3, "atten.logits=%s", logits.mean())
         logit_sink = self.parameters.get("sink", None)
         probs = softmax_with_biases(
             logits, attention_logit_biases=attention_logit_biases.value(), logit_sink=logit_sink
@@ -2483,7 +2489,7 @@ class SigmoidAttention(MultiheadAttention):
         k_proj, v_proj = k_proj.astype(q_proj.dtype), v_proj.astype(q_proj.dtype)
         logits = self._compute_logits(q_proj, k_proj)
         logits = self._cap_logits(logits)
-        self.vlog(3, "atten.logits=%s", logits[0, 0, 0, :])
+        self.vlog(3, "atten.logits=%s", logits.mean())
 
         attention_logit_biases = attention_logit_biases.value()
         if attention_logit_biases is None:
