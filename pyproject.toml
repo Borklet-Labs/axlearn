@@ -83,6 +83,7 @@ gcp = [
     "google-api-python-client==2.109.0",
     "google-auth>=2.29.0,<3",
     "google-auth[pyopenssl]",  # Ensures that we have compatible pyopenssl/cryptography pins.
+    "google-cloud-aiplatform>=1.61.0",
     "google-cloud-storage==2.19.0",
     "google-cloud-compute==1.47.0", # Needed for region discovery for CloudBuild API access.
     "google-cloud-core==2.3.3",
@@ -99,18 +100,6 @@ tpu = [
     "axlearn[gcp]",
     "jax[tpu]==0.10.0",  # must be >=0.4.19 for compat with v5p.
     "pathwaysutils==0.1.2",  # For JAX+Pathways single-controller accelerator coordinator.
-]
-# Vertex AI tensorboard. TODO(markblee): Merge with `gcp`.
-vertexai_tensorboard = [
-    # Required to fix a `distro-info` bug we run into when using `tb_gcp_tensorboard` from
-    # `google_cloud_aiplatform[tensorboard]`. See:
-    # [1] https://bugs.launchpad.net/ubuntu/+source/distro-info/+bug/1991606
-    # [2] https://github.com/pypa/setuptools/issues/3772
-    "setuptools==65.7.0",
-    # Pin version to fix Tensorboard uploader TypeError: can only concatenate str (not "NoneType") to str
-    # https://github.com/googleapis/python-aiplatform/commit/4f982ab254b05fe44a9d2ed959fca2793961b56c
-    "google-cloud-aiplatform[tensorboard]>=1.61.0",
-    "tensorboard",
 ]
 # Dataflow dependencies.
 dataflow = [
