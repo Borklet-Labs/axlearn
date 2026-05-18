@@ -618,6 +618,7 @@ class SpmdTrainer(Module):
                 stop_trace_step = None
 
                 input_iterator = self.input.batches(self._input_iter)
+                total_num_params = count_model_params(self._trainer_state.model)
                 while True:
                     self._maybe_record_event(measurement.Event.START_DATA_LOADING)
                     try:
@@ -645,11 +646,26 @@ class SpmdTrainer(Module):
                             ),
                         )
                         self.vlog(3, "Done step %s", self.step)
+
+                        # Unpack Global Input Batch Size, Seq Lenght and get Total Params model
+                        global_input_batch_size, seq_len = utils.shapes(utils.host_to_global_array(input_batch))['input_ids']
+                        devices = jax.device_count()
+                        print(f"Global input batch size: {global_input_batch_size}, Sequence length: {seq_len}, Devices: {devices}, Total number of parameters: {total_num_params}")
+
                         num_steps += 1
                         if num_steps % 100 == 0:
                             now = time.perf_counter()
                             average_step_time = (now - start_time) / num_steps
-                            self._step_log("Average step time: %s seconds", average_step_time)
+
+                            # Calculate Tokens/s/device and TFLOP/s/device
+                            tokens_per_step_per_device = (global_input_batch_size * seq_len) / devices
+                            tok_per_s_device = tokens_per_step_per_device / average_step_time
+                            tflops_per_s_device = (6 * total_num_params * tok_per_s_device) / 1e12
+
+                            self._step_log(
+                                "Average step time: %.4f s    |    Average tokens/s/device: %.2f    |    Average TFLOPs/s/device: %.2f",
+                                average_step_time, tok_per_s_device, tflops_per_s_device
+                            )
                             self.summary_writer(self.step, {"average_step_time": average_step_time})
                             num_steps = 0
                             start_time = now
