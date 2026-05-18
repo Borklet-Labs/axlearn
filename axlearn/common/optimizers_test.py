@@ -1,6 +1,7 @@
 # Copyright © 2023 Apple Inc.
 
 """Tests optimization modules."""
+
 # pylint: disable=no-self-use,too-many-lines
 import itertools
 import math
@@ -46,9 +47,6 @@ from axlearn.common.optimizers import (
     opt_param_values,
     param_ema,
     per_param_scale_by_path,
-)
-from axlearn.common.optimizers import scale as scale_by_value
-from axlearn.common.optimizers import (
     scale_by_param_block_rms,
     scale_by_schedule,
     scale_by_trust_ratio,
@@ -57,6 +55,7 @@ from axlearn.common.optimizers import (
     skip_and_clip_by_global_norm,
     with_partition_fn,
 )
+from axlearn.common.optimizers import scale as scale_by_value
 from axlearn.common.schedule import Schedule, adafactor_decay_rate, decay_bias_correction
 from axlearn.common.test_utils import TestCase, assert_allclose
 from axlearn.common.utils import (
@@ -1312,13 +1311,18 @@ class OptimizerTest(TestCase):
             self.assertEqual(new_state.count, 1)
 
             if isinstance(decay, float):
-                ema_fn = lambda p: (
-                    (1 - decay) * p.value
-                    if jnp.issubdtype(p.value.dtype, jnp.floating)
-                    else p.value
-                )
+
+                def ema_fn(p):
+                    return (
+                        (1 - decay) * p.value
+                        if jnp.issubdtype(p.value.dtype, jnp.floating)
+                        else p.value
+                    )
             else:
-                ema_fn = lambda p: p.value
+
+                def ema_fn(p):
+                    return p.value
+
             self.assertNestedAllClose(jax.tree.map(ema_fn, params), new_state.ema)
 
     def test_scale_by_schedule(self):

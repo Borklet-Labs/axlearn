@@ -1,6 +1,7 @@
 # Copyright © 2023 Apple Inc.
 
 """Wrappers for FlashAttention on TPU in JAX with logit bias support."""
+
 import functools
 from typing import Optional
 
@@ -17,16 +18,14 @@ from jax.experimental.pallas.ops.tpu.flash_attention import (
     MIN_BLOCK_SIZE,
     NUM_LANES,
     NUM_SUBLANES,
-)
-from jax.experimental.pallas.ops.tpu.flash_attention import BlockSizes as LegacyBlockSizes
-from jax.experimental.pallas.ops.tpu.flash_attention import SegmentIds as LegacySegmentIds
-from jax.experimental.pallas.ops.tpu.flash_attention import (
     _flash_attention_dkv_kernel,
     _flash_attention_dq_kernel,
     _flash_attention_kernel,
     _verify_block,
     below_or_on_diag,
 )
+from jax.experimental.pallas.ops.tpu.flash_attention import BlockSizes as LegacyBlockSizes
+from jax.experimental.pallas.ops.tpu.flash_attention import SegmentIds as LegacySegmentIds
 from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_mask
 from jax.experimental.pallas.ops.tpu.splash_attention import (
@@ -233,7 +232,7 @@ def _flash_attention_bwd(
     (q, k, v, ab, segment_ids, o, l, m) = residuals
     if not block_sizes.has_backward_blocks:
         raise ValueError(
-            "Program is being differentiated, but not all backward blocks are" " specified"
+            "Program is being differentiated, but not all backward blocks are specified"
         )
 
     di = jnp.sum(
@@ -1164,7 +1163,9 @@ class TPUSplashAttentionWithAllGather(TPUSplashAttention):
             # Need key limit mask if padding is applied to keys
             original_mask_len = unpadded_k_len if unpadded_k_len % block_size != 0 else None
 
-        mul_block_len = lambda seq_len: seq_len + (-seq_len % block_size)
+        def mul_block_len(seq_len):
+            return seq_len + (-seq_len % block_size)
+
         mask_shape = (mul_block_len(query.shape[1]), mul_block_len(key.shape[1]))
         splash_mask = _to_splash_mask(mask, mask_shape=mask_shape, unpadded_k_len=original_mask_len)
         mesh = thread_resources.env.physical_mesh

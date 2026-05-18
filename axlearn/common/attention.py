@@ -4533,7 +4533,8 @@ class RematRegexSavePatterns(enum.Enum):
 
 def build_remat_spec(
     stack_cfg: Union[
-        BaseStackedTransformerLayer.Config, "RepeatedConformerLayer.Config"  # type: ignore
+        BaseStackedTransformerLayer.Config,
+        "RepeatedConformerLayer.Config",  # type: ignore  # noqa: F821  # forward ref to avoid circular import
     ],
     *,
     save_pattern: SavePattern = RematRegexSavePatterns.NATIVE_ATTENTION.value,
