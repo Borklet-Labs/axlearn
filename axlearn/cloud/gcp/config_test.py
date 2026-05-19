@@ -3,6 +3,7 @@
 """Tests config utils."""
 
 import os
+from unittest.mock import patch
 
 from absl import flags
 from absl.testing import absltest
@@ -11,7 +12,6 @@ from axlearn.cloud.common import config
 from axlearn.cloud.common.config_test import _setup_fake_repo, create_default_config
 from axlearn.cloud.gcp import config as gcp_config
 from axlearn.common.test_utils import TestWithTemporaryCWD
-from unittest.mock import patch
 
 
 class ConfigTest(TestWithTemporaryCWD):

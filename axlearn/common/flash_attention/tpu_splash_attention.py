@@ -42,10 +42,10 @@ from typing import Literal, overload
 
 import jax
 import jax.numpy as jnp
-from jax.ad_checkpoint import checkpoint_name
 import numpy as np
 from jax import lax, tree_util
 from jax._src.pallas.mosaic import random as plrandom
+from jax.ad_checkpoint import checkpoint_name
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_mask as mask_lib

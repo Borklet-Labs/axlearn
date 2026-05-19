@@ -8,9 +8,9 @@ from typing import Optional
 import jax
 import jax.numpy as jnp
 from absl import logging
-from jax.ad_checkpoint import checkpoint_name
 from jax import lax
 from jax._src.mesh import thread_resources
+from jax.ad_checkpoint import checkpoint_name
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 from jax.experimental.pallas.ops.tpu.flash_attention import (

@@ -87,7 +87,9 @@ class BaseQuantizedEinsum(BaseLayer):
     a quantized einsum.
     """
 
-    def einsum_maybe_quantized(self, subscripts, *, activation: Tensor, kernel: Tensor, out_sharding: Optional[Any] = None) -> Tensor:
+    def einsum_maybe_quantized(
+        self, subscripts, *, activation: Tensor, kernel: Tensor, out_sharding: Optional[Any] = None
+    ) -> Tensor:
         """Implements activation-kernel einsum with quantization (e.g. fakequant, fp8-fp8, etc.)
 
         Args:
@@ -323,7 +325,9 @@ class QuantizedDotGeneral(BaseQuantizedEinsum):
             preferred_element_type,
         )
 
-    def einsum_maybe_quantized(self, subscripts, *, activation: Tensor, kernel: Tensor, out_sharding: Optional[Any] = None) -> Tensor:
+    def einsum_maybe_quantized(
+        self, subscripts, *, activation: Tensor, kernel: Tensor, out_sharding: Optional[Any] = None
+    ) -> Tensor:
         """jnp.einsum which uses hardware accelerated quantization if applicable.
 
         See docstring for jax.numpy.einsum.
@@ -398,7 +402,12 @@ class DenseGeneralBaseLayer(BaseLayer):
             self._add_child("quantized_dot_general", cfg.quantized_dot_general)
 
     def einsum_maybe_quantized(
-        self, subscript: str, *, activation: Tensor, kernel: Tensor, out_sharding: Optional[Any] = None
+        self,
+        subscript: str,
+        *,
+        activation: Tensor,
+        kernel: Tensor,
+        out_sharding: Optional[Any] = None,
     ) -> Tensor:
         """Computes einsum with `layer.quantized_dot_general` if available.
 

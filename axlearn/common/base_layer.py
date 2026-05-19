@@ -100,8 +100,8 @@ from typing import Any, Callable, Optional, Union
 
 import jax
 from absl import logging
-from jax.ad_checkpoint import checkpoint_name
 from jax import numpy as jnp
+from jax.ad_checkpoint import checkpoint_name
 
 from axlearn.common import param_init
 from axlearn.common.config import ConfigOr, Configurable, config_class, maybe_instantiate
