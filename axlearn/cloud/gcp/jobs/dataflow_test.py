@@ -4,6 +4,7 @@
 # pytype: disable=name-error
 
 import contextlib
+import os
 from typing import Optional, Type, cast
 from unittest import mock
 
@@ -49,6 +50,13 @@ def _mock_flags(cfg):
 
 
 class DataflowJobTest(TestWithTemporaryCWD):
+
+    def setUp(self):
+        super().setUp()
+        self.mock_expanduser = mock.patch("os.path.expanduser", return_value=os.path.join(self._temp_root.name, "user"))
+        self.mock_expanduser.start()
+        self.addCleanup(self.mock_expanduser.stop)
+
     def test_from_flags_bundler(self):
         with _mock_gcp_settings():
             cfg = DataflowJob.default_config()
@@ -120,6 +128,12 @@ class DataflowJobTest(TestWithTemporaryCWD):
 
 class UtilsTest(TestWithTemporaryCWD):
     """Tests util functions."""
+
+    def setUp(self):
+        super().setUp()
+        self.mock_expanduser = mock.patch("os.path.expanduser", return_value=os.path.join(self._temp_root.name, "user"))
+        self.mock_expanduser.start()
+        self.addCleanup(self.mock_expanduser.stop)
 
     @parameterized.product(
         bundler_klass=[

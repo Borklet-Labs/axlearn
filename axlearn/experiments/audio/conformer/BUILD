@@ -95,5 +95,6 @@ py_test(
     deps = [
         ":librispeech_trainer",
         "//axlearn/experiments:test_utils",
+        "@axlearn_pip//tensorboard",
     ],
 )
