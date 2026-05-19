@@ -48,7 +48,7 @@ core = [
     "scipy>=1.12.0",  # to avoid "module 'scipy.linalg' has no attribute 'tril'"
     "seqio==0.0.20",  # used for inputs
     "aqtp==0.9.0", # Updated from 0.4.0; compatible with Python 3.10
-    "flax>=0.12.0", # for AQT, param converter and adapter.
+    "flax==0.12.7", # for AQT, param converter and adapter.
     "prefixed==0.9.0", # For formatting file sizes, param counts, etc.
     "grain==0.2.16", # Grain input processing. 0.2.6 onwards supports macos.
     "tokamax",
@@ -198,7 +198,7 @@ junit_family="xunit2"
 
 [tool.uv.pip]
 find-links = [
-    "https://storage.googleapis.com/axlearn-wheels/test_wheels.html",
+    "https://storage.googleapis.com/axlearn-wheels/wheels.html",
     "https://storage.googleapis.com/jax-releases/libtpu_releases.html",
 ]
 no-build-isolation-package = [

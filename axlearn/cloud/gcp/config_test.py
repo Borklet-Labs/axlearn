@@ -11,10 +11,17 @@ from axlearn.cloud.common import config
 from axlearn.cloud.common.config_test import _setup_fake_repo, create_default_config
 from axlearn.cloud.gcp import config as gcp_config
 from axlearn.common.test_utils import TestWithTemporaryCWD
+from unittest.mock import patch
 
 
 class ConfigTest(TestWithTemporaryCWD):
     """Tests config utils."""
+
+    def setUp(self):
+        super().setUp()
+        self.mock_expanduser = self.enter_context(
+            patch("os.path.expanduser", side_effect=lambda x: x.replace("~", self._temp_root.name))
+        )
 
     def test_gcp_settings(self):
         temp_dir = os.path.realpath(self._temp_root.name)
