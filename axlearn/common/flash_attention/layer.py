@@ -123,7 +123,11 @@ class FlashAttention(GroupedQueryAttention):
         # For compatibility with AOT compilation, we obtain the backend type from physical_mesh.
         global_mesh = get_current_abstract_or_physical_mesh()
 
-        if hasattr(global_mesh, "devices") and global_mesh.devices is not None and np.size(global_mesh.devices) > 0:
+        if (
+            hasattr(global_mesh, "devices")
+            and global_mesh.devices is not None
+            and np.size(global_mesh.devices) > 0
+        ):
             first_device = global_mesh.devices.flat[0]
             if first_device is not None:
                 backend = first_device.platform
@@ -145,7 +149,7 @@ class FlashAttention(GroupedQueryAttention):
         cfg: FlashAttention.Config = self.config
         partition_spec = cfg.mha_dim_to_partition_spec["bsnh"]
         global_mesh = get_current_abstract_or_physical_mesh()
-            
+
         if (
             partition_spec == PartitionSpec(None)
             or len(partition_spec) != 4
@@ -290,7 +294,7 @@ class FlashAttention(GroupedQueryAttention):
         prng_key_partition_spec = PartitionSpec(sharded_axes) if sharded_axes else PartitionSpec()
         # Pre-split PRNG key to ensure unique randomness across sharded devices
         global_mesh = get_current_abstract_or_physical_mesh()
-            
+
         prepared_prng_key = split_prng_keys_for_shard_map(
             self.dropout.get_prng_key(), prng_key_partition_spec, global_mesh
         )

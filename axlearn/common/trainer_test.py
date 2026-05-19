@@ -13,7 +13,6 @@ import shutil
 import tempfile
 import unittest
 from collections.abc import Sequence
-from packaging import version
 from typing import Any, Callable, Literal, Optional
 
 import chex
@@ -28,6 +27,7 @@ from jax import numpy as jnp
 from jax._src.interpreters import pxla
 from jax.experimental import checkify
 from jax.sharding import PartitionSpec
+from packaging import version
 
 from axlearn.common import (
     debug_utils,

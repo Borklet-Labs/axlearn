@@ -30,8 +30,8 @@ from typing import Callable, NamedTuple, Optional, Protocol, Union
 import jax
 from jax import checkpoint
 from jax import numpy as jnp
-from jax.sharding import PartitionSpec
 from jax.ad_checkpoint import checkpoint_name
+from jax.sharding import PartitionSpec
 
 from axlearn.common import param_init
 from axlearn.common.base_layer import (

@@ -412,7 +412,11 @@ class ConformerLayerTest(TestCase):
             cfg.ff_end.linear2.param_partition_spec = (tp_axis_names, None)
             cfg.ff_start.linear2.output_partition_spec = (batch_axis_names, seq_axis_names, None)
             cfg.ff_end.linear2.output_partition_spec = (batch_axis_names, seq_axis_names, None)
-            cfg.self_attention.attention.output_linear.param_partition_spec = (None, tp_axis_names, None)
+            cfg.self_attention.attention.output_linear.param_partition_spec = (
+                None,
+                tp_axis_names,
+                None,
+            )
             cfg.lconv.linear2.param_partition_spec = (tp_axis_names, None)
             cfg.lconv.linear2.output_partition_spec = (batch_axis_names, seq_axis_names, None)
 
@@ -494,7 +498,10 @@ class ConformerLayerTest(TestCase):
                         )
                     elif name == "linear2":
                         self.assertEqual(
-                            sharding.spec, PartitionSpec(("data", "fsdp"),)
+                            sharding.spec,
+                            PartitionSpec(
+                                ("data", "fsdp"),
+                            ),
                         )
 
                 jax.debug.inspect_array_sharding(tensor, callback=callback)
@@ -513,7 +520,12 @@ class ConformerLayerTest(TestCase):
                     return base_outputs
 
                 with jax.set_mesh(mesh):
-                    jax.jit(jit_fn_ff, in_shardings=(NamedSharding(mesh, PartitionSpec(batch_axis_names, None, None)),))(x)
+                    jax.jit(
+                        jit_fn_ff,
+                        in_shardings=(
+                            NamedSharding(mesh, PartitionSpec(batch_axis_names, None, None)),
+                        ),
+                    )(x)
 
             # Test Attention
             def patched_remat_name_mh(_, tensor, name):
@@ -523,9 +535,7 @@ class ConformerLayerTest(TestCase):
                             sharding.spec, PartitionSpec(("data", "fsdp"), None, "model")
                         )
                     elif name == "o_proj":
-                        self.assertEqual(
-                            sharding.spec, PartitionSpec()
-                        )
+                        self.assertEqual(sharding.spec, PartitionSpec())
 
                 jax.debug.inspect_array_sharding(tensor, callback=callback)
                 return tensor
@@ -543,7 +553,12 @@ class ConformerLayerTest(TestCase):
                     return base_outputs
 
                 with jax.set_mesh(mesh):
-                    jax.jit(jit_fn_mh, in_shardings=(NamedSharding(mesh, PartitionSpec(batch_axis_names, None, None)),))(x)
+                    jax.jit(
+                        jit_fn_mh,
+                        in_shardings=(
+                            NamedSharding(mesh, PartitionSpec(batch_axis_names, None, None)),
+                        ),
+                    )(x)
 
             # Test LConv
             def patched_remat_name_lc(_, tensor, name):
@@ -554,7 +569,10 @@ class ConformerLayerTest(TestCase):
                         )
                     elif name == "linear2":
                         self.assertEqual(
-                            sharding.spec, PartitionSpec(("data", "fsdp"),)
+                            sharding.spec,
+                            PartitionSpec(
+                                ("data", "fsdp"),
+                            ),
                         )
 
                 jax.debug.inspect_array_sharding(tensor, callback=callback)
@@ -573,7 +591,12 @@ class ConformerLayerTest(TestCase):
                     return base_outputs
 
                 with jax.set_mesh(mesh):
-                    jax.jit(jit_fn_lc, in_shardings=(NamedSharding(mesh, PartitionSpec(batch_axis_names, None, None)),))(x)
+                    jax.jit(
+                        jit_fn_lc,
+                        in_shardings=(
+                            NamedSharding(mesh, PartitionSpec(batch_axis_names, None, None)),
+                        ),
+                    )(x)
 
 
 if __name__ == "__main__":

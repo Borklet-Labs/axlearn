@@ -26,8 +26,8 @@ import jax
 from absl import logging
 from jax import nn
 from jax import numpy as jnp
-from jax.sharding import NamedSharding, PartitionSpec
 from jax._src.mesh import get_abstract_mesh
+from jax.sharding import NamedSharding, PartitionSpec
 
 from axlearn.common import convolution
 from axlearn.common.base_layer import BaseLayer, FactorizationSpec, ParameterNoise, ParameterSpec
@@ -772,7 +772,10 @@ class Linear(DenseGeneralBaseLayer):
             if not mesh.empty:
                 out_sharding = NamedSharding(mesh, PartitionSpec(*cfg.output_partition_spec))
         output = self.einsum_maybe_quantized(
-            "...d,dh->...h", activation=x, kernel=self.parameters["weight"], out_sharding=out_sharding
+            "...d,dh->...h",
+            activation=x,
+            kernel=self.parameters["weight"],
+            out_sharding=out_sharding,
         )
         if cfg.bias:
             output += self.parameters["bias"]

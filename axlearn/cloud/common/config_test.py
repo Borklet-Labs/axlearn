@@ -53,7 +53,9 @@ class ConfigTest(TestWithTemporaryCWD):
 
     def setUp(self):
         super().setUp()
-        self.mock_expanduser = mock.patch("os.path.expanduser", return_value=os.path.join(self._temp_root.name, "user"))
+        self.mock_expanduser = mock.patch(
+            "os.path.expanduser", return_value=os.path.join(self._temp_root.name, "user")
+        )
         self.mock_expanduser.start()
         self.addCleanup(self.mock_expanduser.stop)
 
@@ -248,7 +250,9 @@ class CLITest(TestWithTemporaryCWD):
 
     def setUp(self):
         super().setUp()
-        self.mock_expanduser = mock.patch("os.path.expanduser", return_value=os.path.join(self._temp_root.name, "user"))
+        self.mock_expanduser = mock.patch(
+            "os.path.expanduser", return_value=os.path.join(self._temp_root.name, "user")
+        )
         self.mock_expanduser.start()
         self.addCleanup(self.mock_expanduser.stop)
 

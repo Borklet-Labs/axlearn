@@ -82,8 +82,8 @@ from typing import Any, Callable, NamedTuple, Optional, Protocol, Sequence, Unio
 import jax
 from absl import logging
 from jax import numpy as jnp
-from jax.sharding import NamedSharding, PartitionSpec
 from jax._src.mesh import get_abstract_mesh, thread_resources
+from jax.sharding import NamedSharding
 
 from axlearn.common import param_init
 from axlearn.common.attention_bias import (
