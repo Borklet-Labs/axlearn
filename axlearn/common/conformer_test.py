@@ -469,7 +469,20 @@ class ConformerLayerTest(TestCase):
                 x,
                 NamedSharding(mesh, PartitionSpec(batch_axis_names, seq_axis_names, tp_axis_names)),
             )
-            paddings = jnp.zeros_like(x[:, :, 0]).astype(jnp.bool_)
+            # Failing version with jax0.10.1rc0
+            # paddings = jnp.zeros_like(x[:, :, 0]).astype(jnp.bool_)
+
+            # Manually create "paddings" with shape x[0], x[1] 
+            padding_shape = (x.shape[0], x.shape[1])
+            # batch_axis_names and seq_axis_names are parameters to the test
+            padding_spec = PartitionSpec(batch_axis_names, seq_axis_names)
+            padding_sharding = NamedSharding(mesh, padding_spec)
+
+            paddings = jax.device_put(
+                jnp.zeros(padding_shape, dtype=jnp.bool_),
+                padding_sharding
+            )
+            
             segment_ids = safe_not(paddings).astype(jnp.int32)
 
             # Test FeedForward
