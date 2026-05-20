@@ -467,7 +467,9 @@ class ConformerLayerTest(TestCase):
             x = jax.random.normal(data_prng, data_shape)
             x = jax.device_put(
                 x,
-                NamedSharding(mesh, PartitionSpec(batch_axis_names, seq_axis_names, tp_axis_names)),
+                NamedSharding(
+                    mesh, PartitionSpec(batch_axis_names, seq_axis_names, fsdp_axis_names)
+                ),
             )
             sliced_x = x.at[:, :, 0].get(
                 out_sharding=NamedSharding(mesh, PartitionSpec(batch_axis_names, seq_axis_names))
