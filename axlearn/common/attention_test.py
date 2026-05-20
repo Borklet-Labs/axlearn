@@ -1490,7 +1490,11 @@ class QKVLinearTest(TestCase):
         )
         layer = cfg.instantiate(parent=None)
         state = layer.initialize_parameters_recursively(jax.random.PRNGKey(0))
-        mesh = jax.make_mesh((4, 2), ("data", "model"))
+        mesh = jax.make_mesh(
+            (4, 2),
+            axis_names=("data", "model"),
+            axis_types=(jax.sharding.AxisType.Manual, jax.sharding.AxisType.Auto),
+        )
         query = jnp.ones((4, 8, model_dim))
         state_specs = jax.tree.map(lambda _: PartitionSpec(), state)
 
@@ -6236,7 +6240,12 @@ class LogitSinkTest(TestCase):
         self.assertIn("sink", param_specs)
         sink_spec = param_specs["sink"]
         self.assertEqual(sink_spec.shape, (num_heads,))
-        self.assertEqual((sink_spec.mesh_axes), jax.P("model",))
+        self.assertEqual(
+            (sink_spec.mesh_axes),
+            jax.P(
+                "model",
+            ),
+        )
         self.assertEqual(sink_spec.weight_decay_scale, 0.0)
 
     def test_logit_sink_disabled_by_default(self):
