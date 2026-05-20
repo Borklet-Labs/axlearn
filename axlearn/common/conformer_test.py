@@ -471,10 +471,7 @@ class ConformerLayerTest(TestCase):
                     mesh, PartitionSpec(batch_axis_names, seq_axis_names, fsdp_axis_names)
                 ),
             )
-            sliced_x = x.at[:, :, 0].get(
-                out_sharding=NamedSharding(mesh, PartitionSpec(batch_axis_names, seq_axis_names))
-            )
-            paddings = jnp.zeros_like(sliced_x).astype(jnp.bool_)
+            paddings = jnp.zeros_like(x[:, :, 0]).astype(jnp.bool_)
 
             segment_ids = safe_not(paddings).astype(jnp.int32)
 
