@@ -450,12 +450,13 @@ def text_to_lm_training_input(
     split_fn = functools.partial(
         _trim_or_pad_and_batch, max_padding_fraction=max_padding_fraction, pad_id=vocab.pad_id
     )
-    if not hasattr(ds, "repeat"):
-        # Some dataset types have no repeat() function.
+    if hasattr(ds, "repeat") and hasattr(ds, "__len__"):
+        if len(ds) != sys.maxsize:
+            # Only repeat if not already infinite.
+            ds = ds.repeat(num_epochs=None)
+    else:
+        # Some dataset types have no repeat() or len() function.
         logging.info("Skipping repeat for ds: %s`", ds)
-    elif len(ds) != sys.maxsize:
-        # Only repeat if not already infinite.
-        ds = ds.repeat(num_epochs=None)
     ds = input_grain_text.tokenize(ds, vocab={"text": vocab}, with_eos=True)
     ds = input_grain.rekey(ds, key_map={"target_labels": "text"})
     # Flatten, roll, split.

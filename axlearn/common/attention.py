@@ -496,13 +496,12 @@ class BaseMultiheadLinear(DenseGeneralBaseLayer):
     def _einsum_expr(self):
         raise NotImplementedError(type(self))
 
+    def _get_output_sharding(self) -> Optional[NamedSharding]:
+        return None
+
     def forward(self, inputs: Tensor) -> Tensor:
         params = self.parameters
-        out_sharding = None
-        if self._einsum_expr == "btnh,dnh->btd":
-            mesh = get_abstract_mesh()
-            if not mesh.empty:
-                out_sharding = NamedSharding(mesh, PartitionSpec(None, None, None))
+        out_sharding = self._get_output_sharding()
         outputs = self.einsum_maybe_quantized(
             self._einsum_expr, activation=inputs, kernel=params["weight"], out_sharding=out_sharding
         )
@@ -553,6 +552,12 @@ class MultiheadOutputLinear(BaseMultiheadLinear):
     @property
     def _einsum_expr(self):
         return "btnh,dnh->btd"
+
+    def _get_output_sharding(self) -> Optional[NamedSharding]:
+        mesh = get_abstract_mesh()
+        if not mesh.empty:
+            return NamedSharding(mesh, PartitionSpec(None, None, None))
+        return None
 
     @property
     def _bias_spec(self):

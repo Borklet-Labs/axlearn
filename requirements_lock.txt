@@ -303,7 +303,7 @@ iniconfig==2.3.0
     # via pytest
 jaraco-functools==4.4.0
     # via cheroot
-jax==0.10.0
+jax==0.10.1
     # via
     #   -r requirements.in
     #   aqtp
@@ -315,7 +315,7 @@ jax==0.10.0
     #   qwix
     #   seqio
     #   tokamax
-jaxlib==0.10.0
+jaxlib==0.10.1
     # via
     #   -r requirements.in
     #   aqtp
