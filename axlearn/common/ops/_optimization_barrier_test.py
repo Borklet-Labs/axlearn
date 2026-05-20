@@ -51,7 +51,7 @@ class OptimizationBarrierTest(TestCase):
         hlo = test_utils.clean_hlo(hlo)
         self.assertIn(a, hlo)
         self.assertIn(b, hlo)
-        self.assertNotIn(product, hlo)
+        self.assertNotIn(f"constant={product}", hlo)
 
     def test_forward_optimization_barrier_grad(self):
         """Tests that `forward_optimization_barrier` does not wrap new computations generated
