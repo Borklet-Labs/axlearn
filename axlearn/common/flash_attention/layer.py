@@ -123,21 +123,19 @@ class FlashAttention(GroupedQueryAttention):
         # For compatibility with AOT compilation, we obtain the backend type from physical_mesh.
         global_mesh = get_current_abstract_or_physical_mesh()
 
-        if (
-            hasattr(global_mesh, "devices")
-            and global_mesh.devices is not None
-            and np.size(global_mesh.devices) > 0
-        ):
-            first_device = global_mesh.devices.flat[0]
-            if first_device is not None:
-                backend = first_device.platform
-            else:
-                backend = jax.default_backend()
-        elif hasattr(global_mesh, "device_kind") and global_mesh.device_kind is not None:
+        backend = None
+        if hasattr(global_mesh, "devices") and global_mesh.devices is not None:
+            for device in global_mesh.devices.flat:
+                if device is not None:
+                    backend = device.platform
+                    break
+
+        if backend is None and hasattr(global_mesh, "device_kind") and global_mesh.device_kind is not None:
             backend = global_mesh.device_kind
-        else:
-            # Fall back to jax.default_backend() if no device is found.
+
+        if backend is None:
             backend = jax.default_backend()
+
         return backend
 
     def _logit_biases_spec(self, attention_logit_biases: BaseAttentionBias) -> BaseAttentionBias:

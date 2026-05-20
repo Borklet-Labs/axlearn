@@ -2,8 +2,8 @@
 # Custom wheels for tensorflow-io and libtpu (matches pyproject.toml [tool.uv.pip] find-links).
 --find-links https://storage.googleapis.com/axlearn-wheels/wheels.html
 --find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html
-jax==0.10.0
-jaxlib==0.10.0
+jax==0.10.1
+jaxlib==0.10.1
 typing-extensions
 attrs
 numpy
