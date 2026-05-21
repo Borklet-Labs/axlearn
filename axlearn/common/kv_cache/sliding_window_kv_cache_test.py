@@ -4,6 +4,7 @@
 
 import jax
 import jax.numpy as jnp
+from jax.sharding import AxisType
 import pytest
 from absl.testing import absltest, parameterized
 from jax.sharding import PartitionSpec
@@ -131,7 +132,7 @@ class SlidingWindowKVCacheTest(TestCase):
             batch_size=batch, kv_len=32, num_kv_heads=heads, per_head_dim=dim
         )
 
-        with jax.make_mesh((4, 2), ("data", "model")):
+        with jax.make_mesh((4, 2), ("data", "model"), axis_types=(AxisType.Auto, AxisType.Auto)):
 
             @jax.jit
             def f():
