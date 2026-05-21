@@ -5,6 +5,7 @@
 import jax
 import jax.numpy as jnp
 import pytest
+from jax.sharding import AxisType
 from absl.testing import absltest, parameterized
 from jax.sharding import PartitionSpec
 
@@ -173,7 +174,7 @@ class KVCacheTest(TestCase):
         )
         shape = KVCache.Shape(batch_size=batch, kv_len=kv_len, num_kv_heads=heads, per_head_dim=dim)
 
-        with jax.make_mesh((4, 2), ("data", "model")):
+        with jax.make_mesh((4, 2), ("data", "model"), axis_types=(AxisType.Auto, AxisType.Auto)):
 
             @jax.jit
             def f():
