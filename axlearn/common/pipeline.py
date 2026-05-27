@@ -27,8 +27,10 @@ import dataclasses
 import functools
 from typing import Callable, NamedTuple, Optional, Protocol, Union
 
-import jax.ad_checkpoint
+import jax
+from jax import checkpoint
 from jax import numpy as jnp
+from jax.ad_checkpoint import checkpoint_name
 from jax.sharding import PartitionSpec
 
 from axlearn.common import param_init
@@ -550,7 +552,7 @@ class StreamSchedule(BaseSchedule):
 
             def compute_carry_input(v_input_t: Tensor, v_carry_output_t_1: Tensor) -> Tensor:
                 v_input_t = _select_input_or_previous_outputs(v_input_t, v_carry_output_t_1)
-                return jax.ad_checkpoint.checkpoint_name(_shard_pipeline(v_input_t), "iter_input")
+                return checkpoint_name(_shard_pipeline(v_input_t), "iter_input")
 
             # Compute vmap inputs.
             # Leaves are of shape [N, microbatch_size, ...] representing per-stage inputs.

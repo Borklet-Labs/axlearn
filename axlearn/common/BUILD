@@ -2269,6 +2269,7 @@ py_test(
         ":evaler_test_lib",
         "@axlearn_pip//absl_py",
         "@axlearn_pip//jax",
+        "@axlearn_pip//tensorboard",
     ],
 )
 
@@ -2690,6 +2691,7 @@ py_test(
         ":trainer_test_lib",
         ":utils",
         "@axlearn_pip//pillow",
+        "@axlearn_pip//tensorboard",
     ],
 )
 
@@ -2762,7 +2764,10 @@ py_test(
     size = "enormous",
     srcs = ["trainer_test.py"],
     shard_count = 4,
-    deps = [":trainer_test_lib"],
+    deps = [
+        ":trainer_test_lib",
+        "@axlearn_pip//tensorboard",
+    ],
 )
 
 py_test(

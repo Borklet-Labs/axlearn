@@ -28,6 +28,7 @@ from jax import numpy as jnp
 from jax._src.interpreters import pxla
 from jax.experimental import checkify
 from jax.sharding import PartitionSpec
+from packaging import version
 
 from axlearn.common import (
     debug_utils,
@@ -537,9 +538,9 @@ class TrainerTest(test_utils.TestCase):
                     # As of Jax >= 0.6.0, enable_python_cache=False no longer affects the
                     # AOT compilation path. We now expect the cache hits to be 0
                     if version.parse(jax.__version__) >= version.parse("0.6.0"):
-                        pytest.skip(
-                            # pylint: disable-next=line-too-long
-                            "AOT compilation path is not affected by 'enable_python_cache' with Jax >= 0.6.0"
+                        self.skipTest(
+                            "AOT compilation path is not affected by"
+                            " 'enable_python_cache' with Jax >= 0.6.0"
                         )
                     # We expect to have hit the lowering cache on all but one step.
                     self.assertEqual(end_cache_hits - start_cache_hits, cfg.max_step - 1)
@@ -553,9 +554,9 @@ class TrainerTest(test_utils.TestCase):
             else:
                 if not enable_python_cache:
                     if version.parse(jax.__version__) >= version.parse("0.6.0"):
-                        pytest.skip(
-                            # pylint: disable-next=line-too-long
-                            "AOT compilation path is not affected by 'enable_python_cache' with Jax >= 0.6.0"
+                        self.skipTest(
+                            "AOT compilation path is not affected by"
+                            " 'enable_python_cache' with Jax >= 0.6.0"
                         )
                     self.assertEqual(end_cache_hits - start_cache_hits, cfg.max_step - 1)
                     self.assertEqual(mocked_compile_fn.call_count, cfg.max_step)
@@ -1315,7 +1316,7 @@ class SelectExtendedMeshConfigTest(test_utils.TestCase):
                             remat_policies={
                                 "model.linear": RematSpec(
                                     prevent_cse=True,
-                                    policy=jax.ad_checkpoint.checkpoint_policies.dots_saveable,
+                                    policy=jax.checkpoint_policies.dots_saveable,
                                 ),
                             }
                         ),
