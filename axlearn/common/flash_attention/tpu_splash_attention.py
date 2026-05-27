@@ -538,9 +538,9 @@ def _splash_attention_forward(
         in_specs.append(None)
 
     assert fwd_mask_info.partial_mask_blocks is None or fwd_mask_info.q_sequence is None
-    assert not (
-        q_positions is not None and fwd_mask_info.q_sequence is not None
-    ), "q_positions and fwd_mask_info.q_sequence are mutually exclusive."
+    assert not (q_positions is not None and fwd_mask_info.q_sequence is not None), (
+        "q_positions and fwd_mask_info.q_sequence are mutually exclusive."
+    )
     q_sequence = q_positions if q_positions is not None else fwd_mask_info.q_sequence
 
     if q_sequence is not None:
@@ -1052,9 +1052,9 @@ def _splash_attention_bwd_dq(
         in_specs.append(None)
 
     assert mask_info.partial_mask_blocks is None or mask_info.q_sequence is None
-    assert not (
-        q_positions is not None and mask_info.q_sequence is not None
-    ), "q_positions and mask_info.q_sequence are mutually exclusive."
+    assert not (q_positions is not None and mask_info.q_sequence is not None), (
+        "q_positions and mask_info.q_sequence are mutually exclusive."
+    )
     q_sequence = q_positions if q_positions is not None else mask_info.q_sequence
 
     if q_sequence is not None:
@@ -1627,9 +1627,9 @@ def _splash_attention_bwd_dkv(
     else:
         in_specs.append(None)
 
-    assert not (
-        q_positions is not None and mask_info.q_sequence is not None
-    ), "q_positions and mask_info.q_sequence are mutually exclusive."
+    assert not (q_positions is not None and mask_info.q_sequence is not None), (
+        "q_positions and mask_info.q_sequence are mutually exclusive."
+    )
     q_sequence = q_positions if q_positions is not None else mask_info.q_sequence
 
     if q_sequence is not None:

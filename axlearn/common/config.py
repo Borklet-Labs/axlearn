@@ -162,8 +162,7 @@ class RequiredFieldValue:
     # Attribute access — covers .items(), .keys(), .values(), .set(), etc.
     def __getattr__(self, name: str) -> Any:
         raise AttributeError(
-            f"Cannot access attribute '{name}' on a required config field "
-            "before setting its value."
+            f"Cannot access attribute '{name}' on a required config field before setting its value."
         )
 
     # Subscript — covers [key].
@@ -180,7 +179,7 @@ class RequiredFieldValue:
     def __contains__(self, item: Any) -> bool:
         self._raise("check membership of")
 
-    def __len__(self) -> int:  # pylint: disable=invalid-length-returned
+    def __len__(self) -> int:  # noqa: PLE0303  # always raises
         self._raise("get length of")
 
     # Callable.
@@ -754,9 +753,14 @@ class ConfigBase:
             exit_fn: Called after an enter-able object has been traversed.
         """
         if not enter_fn:
-            enter_fn = lambda key, val, items: items
+
+            def enter_fn(key, val, items):
+                return items
+
         if not exit_fn:
-            exit_fn = lambda key, val: None
+
+            def exit_fn(key, val):
+                return None
 
         def _visit(key: str, val: Any):
             val_items = enter_fn(key, val, _default_enter_fn(key, val))
@@ -794,7 +798,7 @@ class ConfigBase:
     def _key_error_string(self, name: str) -> str:
         similar = similar_names(name, list(self.keys()))
         if similar:
-            return f"{name} (did you mean: [{", ".join(similar)}])"
+            return f"{name} (did you mean: [{', '.join(similar)}])"
         return f"{name} (keys are {self.keys()})"
 
 
@@ -1228,7 +1232,7 @@ def get_named_trainer_config(config_name: str, *, config_module: str) -> Trainer
     except KeyError as e:
         similar = similar_names(config_name, set(config_map.keys()))
         if similar:
-            message = f"Unrecognized config {config_name}; did you mean [{", ".join(similar)}]"
+            message = f"Unrecognized config {config_name}; did you mean [{', '.join(similar)}]"
         else:
             message = (
                 f"Unrecognized config {config_name} under {config_module}; "

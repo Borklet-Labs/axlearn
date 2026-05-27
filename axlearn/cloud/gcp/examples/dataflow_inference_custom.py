@@ -47,7 +47,6 @@ $ axlearn gcp dataflow start \
 
 """
 
-
 import copy
 import logging
 from collections.abc import Sequence
@@ -208,8 +207,7 @@ def main(args):
     pipeline = beam.Pipeline(options=pipeline_options)
 
     with pipeline as p:
-        # pylint: disable-next=unused-variable
-        result = (
+        _ = (
             p
             | "CreateInput" >> beam.Create(pipeline_input)
             | "RunInference" >> RunInference(CustomModelHandler(absl_flags.flag_values_dict()))

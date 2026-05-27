@@ -126,6 +126,7 @@ bs=1,num_heads=4,seq_len=16384,sw_sz=4096         5.914208      0.493888      0.
 bs=1,num_heads=4,seq_len=32768,sw_sz=1024         23.976608     0.308416      0.195104
 bs=1,num_heads=4,seq_len=32768,sw_sz=4096         24.004320     0.942208      0.517792
 """
+
 # pylint: enable=line-too-long
 import itertools
 from typing import Any, Optional, Protocol, Union
@@ -257,7 +258,10 @@ def bench_flash_attention(
             argnums=(0, 1, 2),
         )
     else:
-        fn = lambda q, k, v, b: base_fn(dict(query=q, key=k, value=v, bias=b))
+
+        def fn(q, k, v, b):
+            return base_fn(dict(query=q, key=k, value=v, bias=b))
+
     return measure(fn, q, k, v, bias)
 
 

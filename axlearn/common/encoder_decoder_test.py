@@ -26,8 +26,8 @@ from axlearn.common.encoder_decoder import EncoderDecoderModel
 from axlearn.common.golden import load_golden
 from axlearn.common.layers import set_layer_norm_eps_recursively
 from axlearn.common.module import functional as F
-from axlearn.common.param_converter import parameters_from_t5x_encoder_decoder
 from axlearn.common.t5 import t5_encoder_decoder_config
+from axlearn.common.t5x_param_converter import parameters_from_t5x_encoder_decoder
 from axlearn.common.test_utils import TestCase, assert_allclose, dummy_padding_mask
 
 _MODULE_NAME = "axlearn.common.encoder_decoder_test"
@@ -228,8 +228,8 @@ class TestEncoderDecoder(TestCase):
             )
             if method == "sample_decode":
                 # Modify logits so that we will always sample the last token ID.
-                inputs["logits_modifier"] = (
-                    lambda logits: jnp.full_like(logits, decoding.NEG_INF).at[..., -1].set(0)
+                inputs["logits_modifier"] = lambda logits: (
+                    jnp.full_like(logits, decoding.NEG_INF).at[..., -1].set(0)
                 )
 
             outputs, _ = F(

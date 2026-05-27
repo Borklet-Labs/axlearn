@@ -356,7 +356,7 @@ def _build_base_pathways_worker_container(
             # The flag below is needed for better H2D performance.
             # We use 1/4 of the host memory, rounding up to power of 2 as premapped buffer.
             # Note that pathways worker requires this flag to be a power of 2.
-            f"--tpu_premapped_buffer_size={round_up_to_power_of_2(host_memory//4)*(1<<30)}",
+            f"--tpu_premapped_buffer_size={round_up_to_power_of_2(host_memory // 4) * (1 << 30)}",
         )
     else:
         # Colocated python uses more host memory.
@@ -364,7 +364,7 @@ def _build_base_pathways_worker_container(
         premapped_buffer_size_gb = min(round_up_to_power_of_2(host_memory // 16), 32)
         args.extend(
             [
-                f"--tpu_premapped_buffer_size={premapped_buffer_size_gb * (1<<30)}",
+                f"--tpu_premapped_buffer_size={premapped_buffer_size_gb * (1 << 30)}",
                 f"--cloud_pathways_sidecar_shm_directory={_PATHWAYS_SHM_DIR}",
             ]
         )
@@ -384,6 +384,13 @@ def _build_base_pathways_worker_container(
     # distribute works to workers.
     # So workers doesn't need to execute the command by themselves.
     worker_container.pop("command")
+
+    # Health probes (startupProbe, readinessProbe, livenessProbe) are only meaningful on
+    # pathways head nodes (the JAX client containers), where a service exposes an HTTP health
+    # endpoint. Pathways worker containers run the TPU server binary and have no such endpoint,
+    # so strip any probes that may have been embedded by the base container builder.
+    for probe_key in ("startupProbe", "readinessProbe", "livenessProbe"):
+        worker_container.pop(probe_key, None)
 
     return worker_container
 
@@ -1512,33 +1519,37 @@ class PathwaysLeaderWorkerTemplate(BaseLeaderWorkerTemplate):
         if spec and spec.code_asset_path:
             command = f"{self._bundler.install_command(spec.code_asset_path)} && {command}"
 
+        env = [
+            {
+                "name": "XCLOUD_ENVIRONMENT",
+                "value": "GCP",
+            },
+            {
+                "name": "JAX_PLATFORMS",
+                "value": "proxy",
+            },
+            {
+                "name": "JAX_BACKEND_TARGET",
+                "value": f"grpc://$(LWS_LEADER_ADDRESS):{_PATHWAYS_PROXY_PORT}",
+            },
+            {
+                "name": "TEST_UNDECLARED_OUTPUTS_DIR",
+                "value": "true",
+            },
+            {
+                "name": "PYTHONUNBUFFERED",
+                "value": "1",
+            },
+        ]
+        if cfg.enable_telemetry:
+            env.append({"name": "TELEMETRY_COLLECTION_ENABLED", "value": "true"})
+
         container = dict(
             name=inner_cfg.name,
             image=inner_cfg.image_id or self._bundler.id(inner_cfg.name),
             securityContext={"privileged": True},
             command=["bash", "-c", command],
-            env=[
-                {
-                    "name": "XCLOUD_ENVIRONMENT",
-                    "value": "GCP",
-                },
-                {
-                    "name": "JAX_PLATFORMS",
-                    "value": "proxy",
-                },
-                {
-                    "name": "JAX_BACKEND_TARGET",
-                    "value": f"grpc://$(LWS_LEADER_ADDRESS):{_PATHWAYS_PROXY_PORT}",
-                },
-                {
-                    "name": "TEST_UNDECLARED_OUTPUTS_DIR",
-                    "value": "true",
-                },
-                {
-                    "name": "PYTHONUNBUFFERED",
-                    "value": "1",
-                },
-            ],
+            env=env,
             imagePullPolicy="Always",
             resources=resources,
             ports=([dict(containerPort=cfg.target_port)] if cfg.enable_service else []),

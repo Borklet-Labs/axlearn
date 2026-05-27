@@ -255,7 +255,10 @@ class CompositeAttentionBias(BaseAttentionBias):
 
         Returned biases are not guaranteed to be nonzero, but are guaranteed to not return None.
         """
-        filt = lambda b: b.has_value()
+
+        def filt(b):
+            return b.has_value()
+
         return list(filter(filt, self.biases))
 
     def bias_and_residual(self, cls: Type[B]) -> "BiasAndResidual[B]":
@@ -565,9 +568,11 @@ class MaskFnAttentionBias(BoolAttentionBias):
             pass
 
         # Combine masks.
-        mask = lambda query_position, key_position: jnp.all(
-            jnp.stack([b.mask(query_position, key_position) for b in biases]), axis=0
-        )
+        def mask(query_position, key_position):
+            return jnp.all(
+                jnp.stack([b.mask(query_position, key_position) for b in biases]), axis=0
+            )
+
         return MaskFnAttentionBias(
             mask=mask,
             target_positions=biases[0].target_positions,
@@ -602,7 +607,7 @@ class BoolTensorAttentionBias(BoolAttentionBias):
     def __post_init__(self):
         if getattr(self._internal_bool_value, "ndim", 4) != 4:
             raise ValueError(f"Invalid shape {self._internal_bool_value.shape}.")
-        if getattr(self._internal_bool_value, "dtype", bool) != bool:
+        if getattr(self._internal_bool_value, "dtype", bool) != bool:  # noqa: E721  # dtype equality
             raise ValueError(f"Invalid dtype {self._internal_bool_value.dtype}, expected bool.")
 
     def _bool_value(self) -> Tensor:

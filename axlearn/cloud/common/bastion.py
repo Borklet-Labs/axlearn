@@ -133,9 +133,18 @@ from axlearn.common.config import (
     config_for_function,
     maybe_instantiate,
 )
-from axlearn.common.file_system import NotFoundError, copy, exists, isdir, listdir, makedirs
+from axlearn.common.file_system import (
+    NotFoundError,
+    copy,
+    exists,
+    isdir,
+    listdir,
+    makedirs,
+    readfile,
+    remove,
+    rmtree,
+)
 from axlearn.common.file_system import open as fs_open
-from axlearn.common.file_system import readfile, remove, rmtree
 from axlearn.common.utils import Nested
 
 _LATEST_BASTION_VERSION = 1  # Determines job schema (see JobSpec).
@@ -404,7 +413,7 @@ def deserialize_jobspec(f: Union[str, IO]) -> JobSpec:
             metadata=JobMetadata(**metadata_kwargs),
             code_asset_path=data.get("code_asset_path", None),
         )
-    raise ValidationError(f"Unsupported version: {data["version"]}")
+    raise ValidationError(f"Unsupported version: {data['version']}")
 
 
 # TODO(clopeznataren): Refactor into JobValidator
@@ -696,6 +705,7 @@ def download_job_batch(
                 if validator:
                     validator.validate(spec)
             except ValidationError as e:
+                logging.info("Job %s failed validation: %s", job_name, e)
                 invalid_jobspecs[job_name] = str(e)
             except Exception as e:  # pylint: disable=broad-except
                 # TODO(markblee): Distinguish transient vs non-transient errors.
@@ -1025,7 +1035,7 @@ class Bastion(Configurable):
         try:
             # By default tf_nest does not check types of atoms/leaves.
             def check_leaves(x, y):
-                assert type(x) == type(y)  # pylint: disable=unidiomatic-typecheck
+                assert type(x) == type(y)  # noqa: E721  # exact-type check, not isinstance
 
             tf_nest.map_structure(check_leaves, options, defaults)
         except (TypeError, ValueError, AssertionError) as e:

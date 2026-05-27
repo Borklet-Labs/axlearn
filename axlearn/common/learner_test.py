@@ -30,9 +30,8 @@ from axlearn.common.learner import (
     should_update_with_optimizers,
 )
 from axlearn.common.metrics import MetricAccumulator, WeightedSummary
-from axlearn.common.module import OutputCollection, child_context
+from axlearn.common.module import OutputCollection, child_context, new_output_collection
 from axlearn.common.module import functional as F
-from axlearn.common.module import new_output_collection
 from axlearn.common.optimizer_base import OptParam, OptStateSpec
 from axlearn.common.optimizers import (
     AddDecayedWeightsState,
@@ -1032,8 +1031,11 @@ class CompositeLearnerTest(TestCase):
         learner_state = learner_output_collection.state_updates
         self.assertGreater(forward_outputs.loss, 0.0)
         self.assertGreater(forward_outputs.aux["discriminator_loss"], 0.0)
+
         # The structure of updated params and optimizer states are same.
-        opt_state_leaf_fn = lambda x: isinstance(x, (Tensor, optax.MaskedNode))
+        def opt_state_leaf_fn(x):
+            return isinstance(x, (Tensor, optax.MaskedNode))
+
         self.assertNestedEqual(
             jax.tree_util.tree_structure(updated_model_params),
             jax.tree_util.tree_structure(
@@ -1664,7 +1666,10 @@ class CompositeLearnerTest(TestCase):
         def assert_empty_optimizer(adam_state: optax.ScaleByAdamState):
             nonlocal visited_adam_state
             if isinstance(adam_state, optax.ScaleByAdamState):
-                is_leaf = lambda x: x is None
+
+                def is_leaf(x):
+                    return x is None
+
                 if use_override_inplace_update:
                     jax.tree.map(self.assertIsNone, adam_state.mu, is_leaf=is_leaf)
                     jax.tree.map(self.assertIsNone, adam_state.nu, is_leaf=is_leaf)
