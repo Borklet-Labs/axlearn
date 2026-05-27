@@ -124,13 +124,19 @@ class FlashAttention(GroupedQueryAttention):
         global_mesh = get_current_abstract_or_physical_mesh()
 
         backend = None
-        if hasattr(global_mesh, "devices") and global_mesh.devices is not None:
-            for device in global_mesh.devices.flat:
+        devices = None
+        try:
+            devices = getattr(global_mesh, "devices", None)
+        except ValueError:
+            pass
+
+        if devices is not None:
+            for device in devices.flat:
                 if device is not None:
                     backend = device.platform
                     break
 
-        if backend is None and hasattr(global_mesh, "device_kind") and global_mesh.device_kind is not None:
+        if backend is None and getattr(global_mesh, "device_kind", None) is not None:
             backend = global_mesh.device_kind
 
         if backend is None:
