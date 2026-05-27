@@ -1606,6 +1606,7 @@ class DummyDevice:
     platform: str
     device_kind: str
     process_index: int
+    id: int
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1628,7 +1629,7 @@ class DeviceMeshTest(TestCase):
         # Check that all 1's mesh is still valid.
         device_mesh = create_device_mesh(
             mesh_shape=(1,) * 3,
-            devices=[DummyDevice(platform="cpu", device_kind="cpu", process_index=0)],
+            devices=[DummyDevice(platform="cpu", device_kind="cpu", process_index=0, id=0)],
         )
         self.assertEqual((1,) * 3, device_mesh.shape)
 
@@ -1669,6 +1670,7 @@ class DeviceMeshTest(TestCase):
                 platform="tpu",
                 device_kind="TPU v4",
                 process_index=ix // 4,
+                id=ix,
                 coords=coord,
             )
             for ix, coord in enumerate(coords)
@@ -1735,6 +1737,7 @@ class DeviceMeshTest(TestCase):
                 platform="tpu",
                 device_kind="TPU v4",
                 process_index=(len(coords) * slice_index + ix) // 4,
+                id=(len(coords) * slice_index + ix),
                 coords=coord,
                 slice_index=slice_index,
             )
@@ -1842,6 +1845,7 @@ class DeviceMeshTest(TestCase):
                 platform="tpu",
                 device_kind="TPU v5 lite",
                 process_index=(len(coords) * slice_index + ix) // 4,
+                id=(len(coords) * slice_index + ix),
                 coords=coord,
                 slice_index=slice_index,
             )
@@ -1930,6 +1934,7 @@ class DeviceMeshTest(TestCase):
                 platform="gpu",
                 device_kind="gpu",
                 process_index=(num_gpus_per_process * granule_index + ix) // num_gpus_per_process,
+                id=ix * num_gpus_per_process + granule_index,
             )
             for ix in range(num_gpus_per_process)
             for granule_index in range(num_granules)
