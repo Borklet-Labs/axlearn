@@ -115,7 +115,7 @@ def get_trainer_kwargs(
                 num_experts_per_token=8,
                 tie_word_embeddings=False,
             ),
-            learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
+            learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5),
             max_sequence_length=max_sequence_length,
             train_batch_size=batch_size // max_sequence_length,
             max_step=100,
