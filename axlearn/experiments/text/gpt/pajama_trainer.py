@@ -171,4 +171,34 @@ def named_trainer_configs() -> dict[str, TrainerConfigFn]:
             # Include the dataset name in the config name.
             dataset_config_map = {f"{k}-{dataset_name}": v for k, v in dataset_config_map.items()}
             config_map.update(dataset_config_map)
+
+    # Intercept and apply dynamic overrides for testing (Step 10 auto-termination + frequent checkpointing)
+    def _with_test_overrides(fn):
+        def wrapped():
+            cfg = fn()
+            from axlearn.common.checkpointer import every_n_steps_and_last_policy
+            from axlearn.common.config import config_for_function
+            
+            cfg.max_step = 100
+            cfg.checkpointer.save_policy = config_for_function(every_n_steps_and_last_policy).set(
+                n=10,
+                max_step=100,
+            )
+            cfg.checkpointer.keep_every_n_steps = 10
+            
+            # Override learning rate warmup steps to prevent Optax ValueError:
+            if hasattr(cfg.learner, "optimizer"):
+                for arg in cfg.learner.optimizer.args:
+                    if hasattr(arg, "update_schedule") and hasattr(arg.update_schedule, "warmup_steps"):
+                        arg.update_schedule.warmup_steps = 5
+                        
+            return cfg
+        return wrapped
+
+    # Apply overrides to Gala and Honeycrisp configurations
+    for name in list(config_map.keys()):
+        if "gala" in name or "honeycrisp" in name:
+            config_map[name] = _with_test_overrides(config_map[name])
+
     return config_map
+
