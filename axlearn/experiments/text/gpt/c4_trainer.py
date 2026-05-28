@@ -102,7 +102,10 @@ def _train_input_source(*, vocab_size: int, max_sequence_length: int) -> Instant
         data_mixture_components=_train_data_mixture_components,
         vocab_cfg=_vocab_cfg(vocab_size),
         max_sequence_length=max_sequence_length,
-        preprocessor=config_for_function(lm_text_preprocessor).set(max_padding_fraction=0.5),
+        preprocessor=config_for_function(lm_text_preprocessor).set(
+            max_padding_fraction=0.5,
+            shuffle_buffer_size=16384,
+        ),
     )
     if get_data_dir() == "FAKE":
         source_cfg.preprocessor.shuffle_buffer_size = 0
