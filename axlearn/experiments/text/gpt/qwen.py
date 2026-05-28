@@ -78,8 +78,8 @@ def common_trainer_kwargs() -> dict[str, Any]:
             "alpha": 1 / 200.0,
             "weight_decay": 3.16e-4,
         },
-        "save_every_n_steps": 5000,
-        "keep_every_n_steps": 5000,
+        "save_every_n_steps": 10,
+        "keep_every_n_steps": 10,
         "eval_every_n_steps": 25_000,
         "mesh_shape": mesh_shape_from_axes(data=-1),
     }
@@ -118,7 +118,7 @@ def get_trainer_kwargs(
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
             max_sequence_length=max_sequence_length,
             train_batch_size=batch_size // max_sequence_length,
-            max_step=250_000,
+            max_step=100,
             mesh_shape=mesh_shape_from_axes(fsdp=8, data=-1),
             mesh_rules=(
                 (
