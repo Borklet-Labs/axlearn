@@ -419,13 +419,41 @@ class DenseGeneralBaseLayer(BaseLayer):
         Returns:
             Einsum result.
         """
+        einsum_out_sharding = out_sharding
+        has_auto_or_manual = False
+        
+        if out_sharding is not None:
+            from jax.sharding import AxisType, NamedSharding
+            if isinstance(out_sharding, NamedSharding):
+                mesh = out_sharding.mesh
+                if hasattr(mesh, "axis_types") and mesh.axis_types is not None:
+                    axis_to_type = dict(zip(mesh.axis_names, mesh.axis_types))
+                    for axis_name in out_sharding.spec:
+                        if isinstance(axis_name, (list, tuple)):
+                            for name in axis_name:
+                                if axis_to_type.get(name) in (AxisType.Auto, AxisType.Manual):
+                                    has_auto_or_manual = True
+                        else:
+                            if axis_to_type.get(axis_name) in (AxisType.Auto, AxisType.Manual):
+                                has_auto_or_manual = True
+            if has_auto_or_manual:
+                # Prevent passing logical Auto/Manual shardings directly to einsum
+                einsum_out_sharding = None
+
         if "quantized_dot_general" in self.children:
-            return self.quantized_dot_general.einsum_maybe_quantized(
-                subscript, activation=activation, kernel=kernel, out_sharding=out_sharding
+            output = self.quantized_dot_general.einsum_maybe_quantized(
+                subscript, activation=activation, kernel=kernel, out_sharding=einsum_out_sharding
             )
         else:
-            return jnp.einsum(subscript, activation, kernel, out_sharding=out_sharding)
+            # Safely passes None to einsum if the mesh is 'Auto'
+            output = jnp.einsum(subscript, activation, kernel, out_sharding=einsum_out_sharding)
 
+        # Safely apply the sharding constraint afterwards
+        if has_auto_or_manual and out_sharding is not None:
+            from axlearn.common.utils import with_sharding_constraint
+            output = with_sharding_constraint(output, out_sharding.spec)
+            
+        return output
 
 def set_quantized_dot_general_recursively(
     cfg: BaseLayer.Config,
