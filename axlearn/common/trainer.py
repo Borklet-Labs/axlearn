@@ -18,7 +18,6 @@ from absl import logging
 from jax import numpy as jnp
 from jax.experimental import multihost_utils
 from jax.experimental.pjit import pjit
-from jax.sharding import AxisType
 
 from axlearn.common import file_system as fs
 from axlearn.common import measurement, utils
@@ -303,8 +302,7 @@ class SpmdTrainer(Module):
         devices = (
             utils.create_device_mesh(mesh_shape=cfg.mesh_shape) if devices is None else devices
         )
-        explicit_axis_types = tuple(AxisType.Explicit for _ in cfg.mesh_axis_names)
-        mesh = jax.sharding.Mesh(devices, cfg.mesh_axis_names, axis_types=explicit_axis_types)
+        mesh = jax.sharding.Mesh(devices, cfg.mesh_axis_names)
         self._step_log("Global mesh: %s", mesh)
         self._mesh = mesh
         self._context_manager: Callable[[], ContextManager] = (
