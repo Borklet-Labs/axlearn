@@ -117,7 +117,7 @@ def get_trainer_kwargs(
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5),
             max_sequence_length=max_sequence_length,
-            train_batch_size=batch_size // max_sequence_length,
+            train_batch_size=16,
             max_step=100,
             mesh_shape=mesh_shape_from_axes(fsdp=8, data=-1),
             mesh_rules=(
