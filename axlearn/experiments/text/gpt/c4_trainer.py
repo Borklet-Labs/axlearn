@@ -68,7 +68,8 @@ def _vocab_cfg(vocab_size: int):
         # TikToken.
         return config_for_class(FujiV3Vocabulary).set(filename="Llama-3-tokenizer.json")
     if vocab_size == qwen.QWEN3_VOCAB_SIZE:
-        return config_for_function(vocab).set(sentencepiece_model_name="spm_qwen3_150k.model")
+        # return config_for_function(vocab).set(sentencepiece_model_name="spm_qwen3_150k.model")
+        return config_for_function(vocab).set(sentencepiece_model_name="bpe_32k_c4.model")
     raise ValueError(f"Tokenizer with vocab size {vocab_size} does not exist.")
 
 
