@@ -119,7 +119,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=16,
             max_step=100,
-            mesh_shape=mesh_shape_from_axes(fsdp=8, data=-1),
+            mesh_shape=mesh_shape_from_axes(fsdp=8, expert=2, model=2, data=-1),
             mesh_rules=(
                 (
                     "tpu-v5p-(1024|2048)",
