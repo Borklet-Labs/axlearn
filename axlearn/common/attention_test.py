@@ -1495,7 +1495,7 @@ class QKVLinearTest(TestCase):
         mesh = jax.make_mesh(
             (4, 2),
             axis_names=("data", "model"),
-            axis_types=(jax.sharding.AxisType.Manual, jax.sharding.AxisType.Auto),
+            axis_types=(jax.sharding.AxisType.Auto, jax.sharding.AxisType.Auto),
         )
         query = jnp.ones((4, 8, model_dim))
         state_specs = jax.tree.map(lambda _: PartitionSpec(), state)
