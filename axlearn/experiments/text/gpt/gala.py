@@ -117,7 +117,8 @@ def get_trainer_kwargs(
                 num_heads=12,
             ),
             learner_kwargs=dict(peak_lr=0.01, weight_decay=1e-4, lr_warmup_steps=5_000),
-            train_batch_size=1 * 1024 * 1024 // max_sequence_length,  # 1M tokens.
+            # train_batch_size=1 * 1024 * 1024 // max_sequence_length,  # 1M tokens.
+            train_batch_size=32,
             max_step=400_000,  # 400B tokens // 1M tokens/step.
             mesh_shape=mesh_shape_from_axes(fsdp=-1),
             mesh_rules=(
