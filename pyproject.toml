@@ -167,6 +167,8 @@ select = [
 ignore = [
     "E501",    # line-length enforced by formatter
     "E741",    # ambiguous variable names (l, I, O) — common in ML code
+    "E402",    # module-import-not-at-top-of-file (6)
+    "F401",    # unused-import, outside __init__ (3)
 ]
 
 [tool.ruff.lint.per-file-ignores]

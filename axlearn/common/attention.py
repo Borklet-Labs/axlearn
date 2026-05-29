@@ -1069,11 +1069,10 @@ class FusedGroupedQKVLinear(BaseQKVLinear):
             # after the split to ensure allgather is inserted after the split.
             # Use get_abstract_mesh() to respect shard_map Manual axes.
             auto_axes = set(get_abstract_mesh().auto_axes)
-            manual_axes = set(get_abstract_mesh().manual_axes)
             batch_axes = tuple(
                 x
                 for x in thread_resources.env.physical_mesh.axis_names
-                if x in ("data", "fsdp") and x in auto_axes and x not in manual_axes
+                if x in ("data", "fsdp") and x in auto_axes
             )
             spec = PartitionSpec(
                 batch_axes or PartitionSpec.UNCONSTRAINED,
