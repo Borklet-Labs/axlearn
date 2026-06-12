@@ -157,6 +157,21 @@ class GKEJob(GCPJob):
         # fully blocking; after the call returns there can be a delay before everything is deleted.
         delete_k8s_jobset(cfg.name, namespace=cfg.namespace)
 
+        from axlearn.cloud.gcp.jobset_utils import A4XReplicatedJob
+        if isinstance(self._builder, A4XReplicatedJob):
+            try:
+                k8s.client.CustomObjectsApi().delete_namespaced_custom_object(
+                    group="resource.nvidia.com",
+                    version="v1beta1",
+                    namespace=cfg.namespace,
+                    plural="computedomains",
+                    name=f"{cfg.name}-compute-domain",
+                )
+                logging.info("Deleted ComputeDomain for job %s", cfg.name)
+            except k8s.client.exceptions.ApiException as e:
+                if e.status != 404:
+                    logging.warning("Failed to delete ComputeDomain for job %s: %s", cfg.name, e)
+
     def get_workload_annotations(self) -> dict[str, str]:
         """Returns workload annotations from the underlying builder."""
         return self._builder.get_workload_annotations()
@@ -237,6 +252,41 @@ class GKEJob(GCPJob):
     def _execute(self) -> Any:
         """Submits a JobSet to the cluster."""
         cfg: GKEJob.Config = self.config
+
+        from axlearn.cloud.gcp.jobset_utils import A4XReplicatedJob
+        if isinstance(self._builder, A4XReplicatedJob):
+            # Create the ComputeDomain custom object
+            api_client = k8s.client.CustomObjectsApi()
+            domain_body = {
+                "apiVersion": "resource.nvidia.com/v1beta1",
+                "kind": "ComputeDomain",
+                "metadata": {
+                    "name": f"{cfg.name}-compute-domain"
+                },
+                "spec": {
+                    "numNodes": self._builder.config.accelerator.num_replicas,
+                    "channel": {
+                        "resourceClaimTemplate": {
+                            "name": f"{cfg.name}-compute-domain-channel"
+                        }
+                    }
+                }
+            }
+            logging.info("Creating ComputeDomain custom object: %s", domain_body)
+            try:
+                api_client.create_namespaced_custom_object(
+                    group="resource.nvidia.com",
+                    version="v1beta1",
+                    namespace=cfg.namespace,
+                    plural="computedomains",
+                    body=domain_body,
+                )
+                logging.info("Successfully created ComputeDomain for job %s", cfg.name)
+            except k8s.client.exceptions.ApiException as e:
+                # If it already exists, that's fine.
+                if e.status != 409:
+                    raise
+
         api_kwargs = custom_jobset_kwargs()
         custom_object = dict(
             apiVersion=f"{api_kwargs['group']}/{api_kwargs['version']}",
