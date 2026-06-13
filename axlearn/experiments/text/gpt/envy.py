@@ -70,6 +70,7 @@ from axlearn.experiments.text.gpt.common import (
 from axlearn.experiments.text.gpt.common import model_config as common_model_config
 from axlearn.experiments.text.gpt.fuji import offload_attention_proj_policy
 from axlearn.experiments.trainer_config_utils import V7xFlashConfigModifier
+from axlearn.common.flash_attention.layer import FlashBlockSizeModifier
 
 MODEL_SIZES = ("test", "Switch-Base", "Switch-Large", "Switch-XXL")
 
@@ -248,6 +249,18 @@ def get_trainer_kwargs(
                                     ),
                                 }
                             ),
+                        ],
+                    ),
+                ),
+                (
+                    "gpu-a4x-maxgpu-4g-.*",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                mesh_shape=mesh_shape_from_axes(data=-1, expert=8, fsdp=16)
+                            ),
+                            # Modify the GPU block-size for B200 platform (Pallas kernels)
+                            FlashBlockSizeModifier.default_config().set(gpu_block_size=64),
                         ],
                     ),
                 ),

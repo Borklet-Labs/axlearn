@@ -12,7 +12,7 @@ chex
 pytest
 wrapt
 optax
-tensorflow==2.21.0.2
+tensorflow==2.21.0.3
 tensorflow_datasets==4.9.10
 msgpack
 portpicker
