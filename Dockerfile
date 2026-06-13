@@ -117,6 +117,9 @@ FROM base AS gpu
 # Enable the CUDA repository and install the required libraries (libnvrtc.so)
 RUN curl -o cuda-keyring_1.1-1_all.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
     dpkg -i cuda-keyring_1.1-1_all.deb && \
+    rm cuda-keyring_1.1-1_all.deb && \
+    curl -fsSL https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub | gpg --dearmor -o /usr/share/keyrings/GPG-KEY-Mellanox.pub && \
+    echo "deb [signed-by=/usr/share/keyrings/GPG-KEY-Mellanox.pub] https://linux.mellanox.com/public/repo/doca/latest/ubuntu2404/x86_64 /" | tee /etc/apt/sources.list.d/doca.list && \
     apt-get update && apt-get install -y cuda-libraries-dev-12-9 ibverbs-utils libibverbs-dev && \
     apt clean -y
 COPY pyproject.toml README.md /root/
@@ -132,6 +135,9 @@ FROM base AS gpu-arm
 # Enable the CUDA repository and install the required libraries (libnvrtc.so)
 RUN curl -o cuda-keyring_1.1-1_all.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb && \
     dpkg -i cuda-keyring_1.1-1_all.deb && \
+    rm cuda-keyring_1.1-1_all.deb && \
+    curl -fsSL https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub | gpg --dearmor -o /usr/share/keyrings/GPG-KEY-Mellanox.pub && \
+    echo "deb [signed-by=/usr/share/keyrings/GPG-KEY-Mellanox.pub] https://linux.mellanox.com/public/repo/doca/latest/ubuntu2404/arm64-sbsa /" | tee /etc/apt/sources.list.d/doca.list && \
     apt-get update && apt-get install -y cuda-libraries-dev-12-9 ibverbs-utils libibverbs-dev cuda-compat-13-0 && \
     apt clean -y
 COPY pyproject.toml README.md /root/
