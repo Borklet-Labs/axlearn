@@ -2007,6 +2007,7 @@ class A4XHighReplicatedJob(GPUReplicatedJob):
                 "NCCL_IB_QPS_PER_CONNECTION": "4",
                 "NCCL_IB_TC": "52",
                 "NCCL_IB_FIFO_TC": "84",
+                "NCCL_SOCKET_IFNAME": "eth0",
             }
         )
 
@@ -2172,6 +2173,7 @@ class A4XMaxReplicatedJob(GPUReplicatedJob):
                 "NCCL_IB_GID_INDEX": "3",
                 "NCCL_P2P_NET_CHUNKSIZE": "262144",
                 "NCCL_NCHANNELS_PER_NET_PEER": "1",
+                "NCCL_SOCKET_IFNAME": "eth0",
             }
         )
 

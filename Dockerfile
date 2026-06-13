@@ -117,7 +117,7 @@ FROM base AS gpu
 # Enable the CUDA repository and install the required libraries (libnvrtc.so)
 RUN curl -o cuda-keyring_1.1-1_all.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
     dpkg -i cuda-keyring_1.1-1_all.deb && \
-    apt-get update && apt-get install -y cuda-libraries-dev-12-9 ibverbs-utils && \
+    apt-get update && apt-get install -y cuda-libraries-dev-12-9 ibverbs-utils libibverbs-dev && \
     apt clean -y
 COPY pyproject.toml README.md /root/
 RUN uv pip install -qq .[core,gpu] && uv cache clean
@@ -132,7 +132,7 @@ FROM base AS gpu-arm
 # Enable the CUDA repository and install the required libraries (libnvrtc.so)
 RUN curl -o cuda-keyring_1.1-1_all.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb && \
     dpkg -i cuda-keyring_1.1-1_all.deb && \
-    apt-get update && apt-get install -y cuda-libraries-dev-12-9 ibverbs-utils cuda-compat-13-0 && \
+    apt-get update && apt-get install -y cuda-libraries-dev-12-9 ibverbs-utils libibverbs-dev cuda-compat-13-0 && \
     apt clean -y
 COPY pyproject.toml README.md /root/
 RUN uv pip install -qq .[core,gpu] && uv cache clean
