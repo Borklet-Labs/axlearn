@@ -135,10 +135,7 @@ RUN curl -o cuda-keyring_1.1-1_all.deb https://developer.download.nvidia.com/com
     apt-get update && apt-get install -y cuda-libraries-dev-12-9 ibverbs-utils cuda-compat-13-0 && \
     apt clean -y
 COPY pyproject.toml README.md /root/
-RUN uv pip install -qq .[core,gpu] && \
-    uv pip uninstall tensorflow && \
-    uv pip install --no-deps https://storage.googleapis.com/axlearn-wheels/test2/tensorflow-2.19.1.4-cp312-cp312-linux_aarch64.whl && \
-    uv cache clean
+RUN uv pip install -qq .[core,gpu] && uv cache clean
 COPY . .
 
 ################################################################################
