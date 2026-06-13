@@ -128,7 +128,7 @@ gpu = [
     "jax[cuda13]==0.8.3",
     "nvidia-ml-py==13.580.126",
     # pin nccl version, otherwise jax[cuda12] will pull latest version
-    "nvidia-nccl-cu13==2.36.9",
+    "nvidia-nccl-cu13==2.30.7",
     "nvidia-cudnn-cu13>=9.8.0.87" # Pin CuDNN to at least 9.8 for Jax >= 0.6.2
 ]
 # Orbax checkpointing.
