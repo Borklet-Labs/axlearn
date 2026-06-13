@@ -1,0 +1,2 @@
+DISTRIBUTION_NAME = "axlearn"
+ROOT_MODULE_NAME = "axlearn"

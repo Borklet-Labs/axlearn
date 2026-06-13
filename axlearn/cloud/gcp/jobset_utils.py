@@ -1920,7 +1920,7 @@ class A4XHighReplicatedJob(GPUReplicatedJob):
         containers = [self._build_main_container()]
         init_containers = self._build_init_containers()
 
-        return dict(
+        pod = dict(
             metadata=dict(annotations=annotations),
             spec=dict(
                 terminationGracePeriodSeconds=60,
@@ -1959,6 +1959,11 @@ class A4XHighReplicatedJob(GPUReplicatedJob):
                 }
             ),
         )
+        for mutator_cfg in cfg.pod_mutators:
+            mutator: PodMutator = mutator_cfg.instantiate()
+            pod = mutator.mutate(self, pod)
+        return pod
+
 
     def _build_main_container(self) -> Nested[Any]:
         """Builds the config for the container running the job.
@@ -2077,7 +2082,7 @@ class A4XMaxReplicatedJob(GPUReplicatedJob):
         containers = [self._build_main_container()]
         init_containers = self._build_init_containers()
 
-        return dict(
+        pod = dict(
             metadata=dict(annotations=annotations),
             spec=dict(
                 terminationGracePeriodSeconds=60,
@@ -2116,6 +2121,11 @@ class A4XMaxReplicatedJob(GPUReplicatedJob):
                 }
             ),
         )
+        for mutator_cfg in cfg.pod_mutators:
+            mutator: PodMutator = mutator_cfg.instantiate()
+            pod = mutator.mutate(self, pod)
+        return pod
+
 
     def _build_main_container(self) -> Nested[Any]:
         """Builds the config for the container running the job.
