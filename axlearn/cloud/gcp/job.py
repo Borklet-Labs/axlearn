@@ -157,8 +157,8 @@ class GKEJob(GCPJob):
         # fully blocking; after the call returns there can be a delay before everything is deleted.
         delete_k8s_jobset(cfg.name, namespace=cfg.namespace)
 
-        from axlearn.cloud.gcp.jobset_utils import A4XReplicatedJob
-        if isinstance(self._builder, A4XReplicatedJob):
+        from axlearn.cloud.gcp.jobset_utils import A4XHighReplicatedJob, A4XMaxReplicatedJob
+        if isinstance(self._builder, (A4XHighReplicatedJob, A4XMaxReplicatedJob)):
             try:
                 k8s.client.CustomObjectsApi().delete_namespaced_custom_object(
                     group="resource.nvidia.com",
@@ -253,8 +253,8 @@ class GKEJob(GCPJob):
         """Submits a JobSet to the cluster."""
         cfg: GKEJob.Config = self.config
 
-        from axlearn.cloud.gcp.jobset_utils import A4XReplicatedJob
-        if isinstance(self._builder, A4XReplicatedJob):
+        from axlearn.cloud.gcp.jobset_utils import A4XHighReplicatedJob, A4XMaxReplicatedJob
+        if isinstance(self._builder, (A4XHighReplicatedJob, A4XMaxReplicatedJob)):
             # Create the ComputeDomain custom object
             api_client = k8s.client.CustomObjectsApi()
             domain_body = {

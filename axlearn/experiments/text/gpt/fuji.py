@@ -544,6 +544,20 @@ def get_trainer_kwargs(
                         ],
                     ),
                 ),
+                # Ensure the gpu_block_size is updated for Blackwell and use FSDP=4 
+                # for GB200 / GB300
+                (
+                    "gpu-(a4x-highgpu-4g|a4x-maxgpu-4g)-.*",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                mesh_shape=mesh_shape_from_axes(data=-1, fsdp=4)
+                            ),
+                            # Modify the GPU block-size for B200 platform (Pallas kernels)
+                            FlashBlockSizeModifier.default_config().set(gpu_block_size=64),
+                        ],
+                    ),
+                ),
                 (
                     "neuron-(trn2|trn2n).48xlarge-64",
                     ChainConfigModifier.default_config().set(
@@ -874,11 +888,23 @@ def get_trainer_kwargs(
                     ),
                 ),
                 (
-                    "gpu-(a4-highgpu-8g)-(256|512|1024)",
+                    "gpu-(a4-highgpu-8g|a4x-highgpu-4g)-(256|512|1024)",
                     ChainConfigModifier.default_config().set(
                         config_modifiers=[
                             MeshShapeModifier.default_config().set(
                                 mesh_shape=mesh_shape_from_axes(data=-1, fsdp=16)
+                            ),
+                            # Modify the GPU block-size for B200 platform (Pallas kernels)
+                            FlashBlockSizeModifier.default_config().set(gpu_block_size=64),
+                        ],
+                    ),
+                ),
+                (
+                    "gpu-a4x-maxgpu-4g-.*",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8)
                             ),
                             # Modify the GPU block-size for B200 platform (Pallas kernels)
                             FlashBlockSizeModifier.default_config().set(gpu_block_size=64),
@@ -1166,6 +1192,8 @@ def trainer_configs(
                         "a3-megagpu-8g",
                         "a3-ultragpu-8g",
                         "a4-highgpu-8g",
+                        "a4x-highgpu-4g",
+                        "a4x-maxgpu-4g",
                         "p5.48xlarge",
                         "p4de.24xlarge",
                     ]
