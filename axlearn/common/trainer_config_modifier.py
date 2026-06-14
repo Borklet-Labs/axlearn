@@ -152,6 +152,37 @@ class MeshShapeModifier(ConfigModifier):
         return cfg
 
 
+class MoEOuterBatchModifier(ConfigModifier):
+    """Update the outer_batch of all MoE layers to match the mesh shape."""
+
+    @config_class
+    class Config(ConfigModifier.Config):
+        mesh_axis_names: Required[Sequence[str]] = REQUIRED
+        outer_batch_axis_names: Required[Sequence[str]] = REQUIRED
+
+    def __call__(self, cfg: SpmdTrainer.Config) -> SpmdTrainer.Config:
+        from axlearn.common.mixture_of_experts import (
+            TransformerFeedForwardMoE,
+            get_outer_batch_from_mesh,
+        )
+
+        outer_batch = get_outer_batch_from_mesh(
+            mesh_axis_names=self.config.mesh_axis_names,
+            outer_batch_axis_names=self.config.outer_batch_axis_names,
+            mesh_shape=cfg.mesh_shape,
+        )
+
+        def visit_fn(_, value):
+            if isinstance(value, TransformerFeedForwardMoE.Config):
+                value.outer_batch = outer_batch
+
+        def enter_fn(_, value, default_kv):
+            return None if isinstance(value, TransformerFeedForwardMoE.Config) else default_kv
+
+        cfg.visit(visit_fn=visit_fn, enter_fn=enter_fn)
+        return cfg
+
+
 class ReplaceLayerConfigModifier(ConfigModifier):
     """Recursively replace a sub-config in the trainer config."""
 

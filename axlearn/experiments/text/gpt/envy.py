@@ -47,6 +47,7 @@ from axlearn.common.trainer_config_modifier import (
     ChainConfigModifier,
     GradientAccumulationModifier,
     MeshShapeModifier,
+    MoEOuterBatchModifier,
     RematSpecModifier,
 )
 from axlearn.common.utils import (
@@ -258,6 +259,10 @@ def get_trainer_kwargs(
                         config_modifiers=[
                             MeshShapeModifier.default_config().set(
                                 mesh_shape=mesh_shape_from_axes(data=-1, expert=8, fsdp=16)
+                            ),
+                            MoEOuterBatchModifier.default_config().set(
+                                mesh_axis_names=MESH_AXIS_NAMES,
+                                outer_batch_axis_names=MOE_OUTER_BATCH_AXIS_NAMES,
                             ),
                             # Modify the GPU block-size for B200 platform (Pallas kernels)
                             FlashBlockSizeModifier.default_config().set(gpu_block_size=64),
