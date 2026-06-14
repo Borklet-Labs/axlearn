@@ -895,6 +895,143 @@ class A3HighReplicatedJobTest(TestCase):
                     main_container_env_vars["XLA_FLAGS"]["value"], env_vars["XLA_FLAGS"]
                 )
 
+
+class A4XHighReplicatedJobTest(TestCase):
+    @contextlib.contextmanager
+    def _job_config(
+        self,
+        bundler_cls: type[Bundler],
+        num_replicas: int,
+        env_vars: Optional[dict] = None,
+    ):
+        with mock_gcp_settings([jobset_utils.__name__, bundler.__name__]):
+            fv = flags.FlagValues()
+            jobset_utils.A4XHighReplicatedJob.define_flags(fv)
+            fv.set_default("instance_type", "gpu-a4x-highgpu-4g")
+            fv.set_default("num_replicas", num_replicas)
+            fv.mark_as_parsed()
+            cfg: jobset_utils.A4XHighReplicatedJob.Config = (
+                jobset_utils.A4XHighReplicatedJob.from_flags(fv)
+            )
+            cfg.project = jobset_utils.gcp_settings("project", required=True, fv=fv)
+            cfg.command = "test-command"
+            cfg.env_vars = env_vars if env_vars is not None else {}
+            bundler_cfg = bundler_cls.from_spec([], fv=fv).set(image="test-image")
+            yield cfg, bundler_cfg
+
+    @parameterized.product(
+        env_vars=[dict(), dict(XLA_FLAGS="--should-overwrite-all")],
+        bundler_cls=[ArtifactRegistryBundler, CloudBuildBundler],
+        num_replicas=[1, 32],
+    )
+    def test_build_pod(
+        self,
+        bundler_cls,
+        num_replicas: int,
+        env_vars: Optional[dict] = None,
+    ):
+        with self._job_config(bundler_cls, env_vars=env_vars, num_replicas=num_replicas) as (
+            cfg,
+            bundler_cfg,
+        ):
+            gke_job: jobset_utils.A4XHighReplicatedJob = cfg.set(name="test").instantiate(
+                bundler=bundler_cfg.instantiate()
+            )
+            # pylint: disable-next=protected-access
+            pod = gke_job._build_pod()
+            pod_spec = pod["spec"]
+
+            self.assertEqual(len(pod_spec["containers"]), 1)
+            self.assertEqual(len(pod_spec["initContainers"]), 0)
+            containers = {container["name"]: container for container in pod_spec["containers"]}
+            main_container = containers["test"]
+            main_container_env = main_container["env"]
+            main_container_env_vars = {env["name"]: env for env in main_container_env}
+            self.assertEqual(main_container["resources"]["limits"]["nvidia.com/gpu"], "4")
+            self.assertEqual(main_container_env_vars["NUM_PROCESSES"]["value"], f"{num_replicas}")
+            if env_vars and env_vars.get("XLA_FLAGS"):
+                self.assertEqual(
+                    main_container_env_vars["XLA_FLAGS"]["value"], env_vars["XLA_FLAGS"]
+                )
+
+    def test_gpu_pod_mutators(self):
+        """Tests that pod_mutators are applied in GPUReplicatedJob._build_pod()."""
+        with self._job_config(ArtifactRegistryBundler, num_replicas=1) as (cfg, bundler_cfg):
+
+            class _TestMutator(PodMutator):
+                @jobset_utils.config_class
+                class Config(PodMutator.Config):
+                    marker: str = ""
+
+                def mutate(self, job_spec, pod):
+                    pod["metadata"]["annotations"]["test-mutator"] = self.config.marker
+                    return pod
+
+            cfg.pod_mutators = [_TestMutator.default_config().set(marker="gpu-marker")]
+            job = cfg.instantiate(bundler=bundler_cfg.instantiate())
+            result = job()
+            pod = result[0]["template"]["spec"]["template"]
+            self.assertEqual(pod["metadata"]["annotations"]["test-mutator"], "gpu-marker")
+
+
+class A4XMaxReplicatedJobTest(TestCase):
+    @contextlib.contextmanager
+    def _job_config(
+        self,
+        bundler_cls: type[Bundler],
+        num_replicas: int,
+        env_vars: Optional[dict] = None,
+    ):
+        with mock_gcp_settings([jobset_utils.__name__, bundler.__name__]):
+            fv = flags.FlagValues()
+            jobset_utils.A4XMaxReplicatedJob.define_flags(fv)
+            fv.set_default("instance_type", "gpu-a4x-maxgpu-4g")
+            fv.set_default("num_replicas", num_replicas)
+            fv.mark_as_parsed()
+            cfg: jobset_utils.A4XMaxReplicatedJob.Config = (
+                jobset_utils.A4XMaxReplicatedJob.from_flags(fv)
+            )
+            cfg.project = jobset_utils.gcp_settings("project", required=True, fv=fv)
+            cfg.command = "test-command"
+            cfg.env_vars = env_vars if env_vars is not None else {}
+            bundler_cfg = bundler_cls.from_spec([], fv=fv).set(image="test-image")
+            yield cfg, bundler_cfg
+
+    @parameterized.product(
+        env_vars=[dict(), dict(XLA_FLAGS="--should-overwrite-all")],
+        bundler_cls=[ArtifactRegistryBundler, CloudBuildBundler],
+        num_replicas=[1, 32],
+    )
+    def test_build_pod(
+        self,
+        bundler_cls,
+        num_replicas: int,
+        env_vars: Optional[dict] = None,
+    ):
+        with self._job_config(bundler_cls, env_vars=env_vars, num_replicas=num_replicas) as (
+            cfg,
+            bundler_cfg,
+        ):
+            gke_job: jobset_utils.A4XMaxReplicatedJob = cfg.set(name="test").instantiate(
+                bundler=bundler_cfg.instantiate()
+            )
+            # pylint: disable-next=protected-access
+            pod = gke_job._build_pod()
+            pod_spec = pod["spec"]
+
+            self.assertEqual(len(pod_spec["containers"]), 1)
+            self.assertEqual(len(pod_spec["initContainers"]), 0)
+            containers = {container["name"]: container for container in pod_spec["containers"]}
+            main_container = containers["test"]
+            main_container_env = main_container["env"]
+            main_container_env_vars = {env["name"]: env for env in main_container_env}
+            self.assertEqual(main_container["resources"]["limits"]["nvidia.com/gpu"], "4")
+            self.assertEqual(main_container_env_vars["NUM_PROCESSES"]["value"], f"{num_replicas}")
+            if env_vars and env_vars.get("XLA_FLAGS"):
+                self.assertEqual(
+                    main_container_env_vars["XLA_FLAGS"]["value"], env_vars["XLA_FLAGS"]
+                )
+
     def test_gpu_pod_mutators(self):
         """Tests that pod_mutators are applied in GPUReplicatedJob._build_pod()."""
         with self._job_config(ArtifactRegistryBundler, num_replicas=1) as (cfg, bundler_cfg):
