@@ -153,7 +153,7 @@ class MeshShapeModifier(ConfigModifier):
 
 
 class MoEOuterBatchModifier(ConfigModifier):
-    """Update the outer_batch of all MoE layers to match the mesh shape."""
+    """Update the outer_batch and num_groups of all MoE layers to match the mesh shape."""
 
     @config_class
     class Config(ConfigModifier.Config):
@@ -172,9 +172,26 @@ class MoEOuterBatchModifier(ConfigModifier):
             mesh_shape=cfg.mesh_shape,
         )
 
+        # Get the size of the "expert" axis from the mesh shape
+        expert_dim = 1
+        if cfg.mesh_shape is not None:
+            mesh_shape = cfg.mesh_shape
+            from axlearn.common.utils import HybridMeshShape, infer_mesh_shape
+            ici_mesh_shape = (
+                mesh_shape.ici_mesh_shape if isinstance(mesh_shape, HybridMeshShape) else mesh_shape
+            )
+            try:
+                ici_mesh_shape = infer_mesh_shape(ici_mesh_shape)
+                if "expert" in self.config.mesh_axis_names:
+                    expert_idx = self.config.mesh_axis_names.index("expert")
+                    expert_dim = ici_mesh_shape[expert_idx]
+            except ValueError:
+                pass
+
         def visit_fn(_, value):
             if isinstance(value, TransformerFeedForwardMoE.Config):
                 value.outer_batch = outer_batch
+                value.num_groups = expert_dim
 
         def enter_fn(_, value, default_kv):
             return None if isinstance(value, TransformerFeedForwardMoE.Config) else default_kv
