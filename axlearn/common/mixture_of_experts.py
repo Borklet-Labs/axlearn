@@ -1646,8 +1646,19 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
         # Perform gating based on logits. Casting to float32 precision is usually needed for
         # stable performance.
         gating = self.gating(logits=logits.astype(jnp.float32))
-        combine_tensor = gating.combine_tensor
-        dispatch_tensor = gating.dispatch_tensor
+
+        # Support dynamic partition spec lookup for different gating implementations.
+        # If the gating class has dispatch_tensor_shape() method, use it to get the correct
+        # partition spec. Otherwise, fall back to "ogsec" for backward compatibility.
+        if hasattr(cfg.gating.klass, "dispatch_tensor_shape"):
+            dispatch_partition_spec = cfg.dim_to_mesh_axis_map[
+                cfg.gating.klass.dispatch_tensor_shape()
+            ]
+        else:
+            dispatch_partition_spec = cfg.dim_to_mesh_axis_map["ogsec"]
+
+        combine_tensor = with_sharding_constraint(gating.combine_tensor, dispatch_partition_spec)
+        dispatch_tensor = with_sharding_constraint(gating.dispatch_tensor, dispatch_partition_spec)
         # Collect aux_loss.
         aux_loss = (
             gating.load_balance_loss * cfg.load_balance_loss_weight
