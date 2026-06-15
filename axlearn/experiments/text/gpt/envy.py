@@ -100,12 +100,12 @@ MOE_DIM_TO_MESH_AXIS_MAP = {
     "me": PartitionSpec(None, None),
     "emh": PartitionSpec("expert", "fsdp", "model"),
     "ehm": PartitionSpec("expert", "model", "fsdp"),
-    "ogsm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, "model"),
+    "ogsm": PartitionSpec(*MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, "model"),
     # Dispatch and combine tensors.
-    "ogsec": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, None),
-    "oegcm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, "model"),
-    "ogecm": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, "model"),
-    "oegch": PartitionSpec(MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, "model"),
+    "ogsec": PartitionSpec(*MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, None),
+    "oegcm": PartitionSpec(*MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, "model"),
+    "ogecm": PartitionSpec(*MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, "model"),
+    "oegch": PartitionSpec(*MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, "model"),
 }
 
 

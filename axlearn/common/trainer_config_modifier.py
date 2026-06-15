@@ -166,11 +166,32 @@ class MoEOuterBatchModifier(ConfigModifier):
             get_outer_batch_from_mesh,
         )
 
-        outer_batch = get_outer_batch_from_mesh(
-            mesh_axis_names=self.config.mesh_axis_names,
-            outer_batch_axis_names=self.config.outer_batch_axis_names,
-            mesh_shape=cfg.mesh_shape,
-        )
+        # Determine outer_batch as tuple or int based on number of axes
+        if cfg.mesh_shape is None:
+            outer_batch = None
+        else:
+            from axlearn.common.utils import HybridMeshShape, infer_mesh_shape
+            ici_mesh_shape = (
+                cfg.mesh_shape.ici_mesh_shape if isinstance(cfg.mesh_shape, HybridMeshShape) else cfg.mesh_shape
+            )
+            try:
+                ici_mesh_shape = infer_mesh_shape(ici_mesh_shape)
+            except ValueError:
+                pass
+            
+            if isinstance(cfg.mesh_shape, HybridMeshShape):
+                # Handle DCN granules
+                from axlearn.common.utils import MeshShape
+                # ici_mesh_shape could have been inferred already
+                granule_shape = tuple(x * y for x, y in zip(ici_mesh_shape, cfg.mesh_shape.dcn_mesh_shape))
+            else:
+                granule_shape = ici_mesh_shape
+
+            outer_batch_dims = [
+                granule_shape[self.config.mesh_axis_names.index(el)]
+                for el in self.config.outer_batch_axis_names
+            ]
+            outer_batch = tuple(outer_batch_dims) if len(outer_batch_dims) > 1 else outer_batch_dims[0]
 
         # Get the size of the "expert" axis from the mesh shape
         expert_dim = 1

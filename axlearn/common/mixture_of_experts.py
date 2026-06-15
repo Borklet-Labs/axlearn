@@ -554,7 +554,7 @@ class Top2Gating(BaseGating):
         # OGSE tensor.
         mask_1 = jax.nn.one_hot(index_1, raw_gates.shape[-1], dtype=cfg.mask_dtype)
 
-        gate_1 = jnp.einsum("ogse,ogse->ogs", raw_gates, mask_1.astype(raw_gates.dtype))
+        gate_1 = jnp.einsum("...se,...se->...s", raw_gates, mask_1.astype(raw_gates.dtype))
         gates_without_top_1 = jnp.where(mask_1, 0.0, raw_gates)
 
         # Greedily pick the 2nd expert.
@@ -562,7 +562,7 @@ class Top2Gating(BaseGating):
 
         mask_2 = jax.nn.one_hot(index_2, cfg.num_experts, dtype=cfg.mask_dtype)
         gate_2 = jnp.einsum(
-            "ogse,ogse->ogs", gates_without_top_1, mask_2.astype(gates_without_top_1.dtype)
+            "...se,...se->...s", gates_without_top_1, mask_2.astype(gates_without_top_1.dtype)
         )
 
         # Renormalize.
@@ -597,10 +597,10 @@ class Top2Gating(BaseGating):
         )
 
         mask_1 *= jnp.less(position_in_expert_1, expert_capacity).astype(mask_1.dtype)
-        position_in_expert_1 = jnp.einsum("ogse,ogse->ogs", position_in_expert_1, mask_1)
+        position_in_expert_1 = jnp.einsum("...se,...se->...s", position_in_expert_1, mask_1)
 
         # How many examples in this sequence go to this expert?
-        mask_1_count = jnp.einsum("ogse->oge", mask_1)
+        mask_1_count = jnp.einsum("...se->...e", mask_1)
         # [batch, group] - mostly ones, but zeros where something didn't fit.
         mask_1_flat = jnp.sum(mask_1, axis=-1, dtype=cfg.mask_dtype)
         assert mask_1_count.dtype == cfg.mask_dtype
@@ -617,7 +617,7 @@ class Top2Gating(BaseGating):
         )
 
         mask_2 *= jnp.less(position_in_expert_2, expert_capacity).astype(mask_2.dtype)
-        position_in_expert_2 = jnp.einsum("ogse,ogse->ogs", position_in_expert_2, mask_2)
+        position_in_expert_2 = jnp.einsum("...se,...se->...s", position_in_expert_2, mask_2)
         mask_2_flat = jnp.sum(mask_2, axis=-1, dtype=cfg.mask_dtype)
 
         gate_1 *= mask_1_flat.astype(gate_1.dtype)
@@ -626,7 +626,7 @@ class Top2Gating(BaseGating):
         spec_ogse = self._get_sharding_spec("ogse")
         spec_ogsc = self._get_sharding_spec("ogsc")
         spec_ogsec = self._get_sharding_spec("ogsec")
-        print(f"--- DETECTED Top2Gating.forward --- spec_ogse={spec_ogse} spec_ogsc={spec_ogsc} spec_ogsec={spec_ogsec}", flush=True)
+
 
         # OGSC tensor.
         b = jax.nn.one_hot(position_in_expert_1, expert_capacity, dtype=jnp.float32)
@@ -639,7 +639,7 @@ class Top2Gating(BaseGating):
         if spec_ogsc is not None:
             b = with_sharding_constraint(b, spec_ogsc)
         # OGSEC tensor.
-        first_part_of_combine_tensor = jnp.einsum("ogse,ogsc->ogsec", a, b)
+        first_part_of_combine_tensor = jnp.einsum("...se,...sc->...sec", a, b)
         if spec_ogsec is not None:
             first_part_of_combine_tensor = with_sharding_constraint(
                 first_part_of_combine_tensor, spec_ogsec
@@ -655,7 +655,7 @@ class Top2Gating(BaseGating):
             a = with_sharding_constraint(a, spec_ogse)
         if spec_ogsc is not None:
             b = with_sharding_constraint(b, spec_ogsc)
-        second_part_of_combine_tensor = jnp.einsum("ogse,ogsc->ogsec", a, b)
+        second_part_of_combine_tensor = jnp.einsum("...se,...sc->...sec", a, b)
         if spec_ogsec is not None:
             second_part_of_combine_tensor = with_sharding_constraint(
                 second_part_of_combine_tensor, spec_ogsec
@@ -727,7 +727,7 @@ class Top2Gating(BaseGating):
         del combine_tensor  # Unused in einsum-based dispatch
         dispatch_tensor = dispatch_tensor.astype(dtype)
         dispatch_tensor = with_sharding_constraint(dispatch_tensor, partition_spec)
-        return jnp.einsum("ogsec,ogsm->oegcm", dispatch_tensor, inputs)
+        return jnp.einsum("...gsec,...gsm->...egcm", dispatch_tensor, inputs)
 
     @nowrap
     def combine(
@@ -741,8 +741,8 @@ class Top2Gating(BaseGating):
         """Take weighted average / combination of dispatched tensors.
 
         Args:
-            inputs: A tensor with shape [O, G, E, C, M].
-            combine_tensor: A tensor with shape [O, G, S, E, C].
+            inputs: A tensor with shape [..., E, G, C, M].
+            combine_tensor: A tensor with shape [..., G, S, E, C].
             dtype: The required dtype for combine tensor.
             partition_spec: Partition spec of combine tensor.
 
@@ -751,7 +751,7 @@ class Top2Gating(BaseGating):
         """
         combine_tensor = combine_tensor.astype(dtype)
         combine_tensor = with_sharding_constraint(combine_tensor, partition_spec)
-        out = jnp.einsum("ogecm,ogsec->ogsm", inputs, combine_tensor)
+        out = jnp.einsum("...gecm,...gsec->...gsm", inputs, combine_tensor)
         spec_ogsm = self._get_sharding_spec("ogsm")
         if spec_ogsm is not None:
             out = with_sharding_constraint(out, spec_ogsm)
@@ -1098,7 +1098,7 @@ class TopKGating(BaseGating):
         del combine_tensor  # Unused in einsum-based dispatch
         dispatch_tensor = dispatch_tensor.astype(dtype)
         dispatch_tensor = with_sharding_constraint(dispatch_tensor, partition_spec)
-        return jnp.einsum("ogsec,ogsm->oegcm", dispatch_tensor, inputs)
+        return jnp.einsum("...gsec,...gsm->...egcm", dispatch_tensor, inputs)
 
     @nowrap
     def combine(
@@ -1112,8 +1112,8 @@ class TopKGating(BaseGating):
         """Take weighted average / combination of dispatched tensors.
 
         Args:
-            inputs: A tensor with shape [O, G, E, C, M].
-            combine_tensor: A tensor with shape [O, G, S, E, C].
+            inputs: A tensor with shape [..., E, G, C, M].
+            combine_tensor: A tensor with shape [..., G, S, E, C].
             dtype: The required dtype for combine tensor.
             partition_spec: Partition spec of combine tensor.
 
@@ -1122,7 +1122,7 @@ class TopKGating(BaseGating):
         """
         combine_tensor = combine_tensor.astype(dtype)
         combine_tensor = with_sharding_constraint(combine_tensor, partition_spec)
-        return jnp.einsum("ogecm,ogsec->ogsm", inputs, combine_tensor)
+        return jnp.einsum("...gecm,...gsec->...gsm", inputs, combine_tensor)
 
 
 class TopKDropFreeGating(TopKGating):
@@ -1701,26 +1701,33 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
         input_dtype = x.dtype
         cfg = self.config
         outer_batch = cfg.outer_batch
-        if x.shape[0] % outer_batch != 0:
+        if isinstance(outer_batch, int):
+            outer_batch_prod = outer_batch
+            outer_batch_shape = [outer_batch]
+        else:
+            outer_batch_prod = int(np.prod(outer_batch))
+            outer_batch_shape = list(outer_batch)
+
+        if x.shape[0] % outer_batch_prod != 0:
             raise ValueError(
-                f"batch_size {x.shape[0]} has to be divisible by outer_batch {outer_batch}."
+                f"batch_size {x.shape[0]} has to be divisible by outer_batch_prod {outer_batch_prod}."
             )
         token_shape = x.shape[:-1]
         # Number of tokens per outer row.
-        num_tokens = np.prod(token_shape) // outer_batch
+        num_tokens = np.prod(token_shape) // outer_batch_prod
         num_groups = cfg.num_groups
         if num_tokens % num_groups != 0:
             raise ValueError(
                 f"Reshaping input sequence from (batch_size, seq_len, input_dim) to "
                 f"(outer_batch, num_groups, group_size, input_dim). "
-                f"batch_size({x.shape[0]}) * seq_len({x.shape[1]}) / outer_batch({outer_batch})"
+                f"batch_size({x.shape[0]}) * seq_len({x.shape[1]}) / outer_batch_prod({outer_batch_prod})"
                 f" = {num_tokens} must be divisible by num_groups({num_groups})."
             )
         group_len = num_tokens // num_groups
         logging.info("Setting the effective group_size=%r", group_len)
-        x = x.reshape([outer_batch, num_groups, group_len, cfg.input_dim])
+        x = x.reshape(outer_batch_shape + [num_groups, group_len, cfg.input_dim])
         x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["ogsm"])
-        logits = jnp.einsum("ogsm,me->ogse", x, self.parameters["gate_weight"])
+        logits = jnp.einsum("...sm,me->...se", x, self.parameters["gate_weight"])
         # Perform gating based on logits. Casting to float32 precision is usually needed for
         # stable performance.
         gating = self.gating(logits=logits.astype(jnp.float32))
@@ -1767,14 +1774,14 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
             x = self.dropout1(x)
         with child_context("wo_einsum", module=self):
             x = self.einsum_maybe_quantized(
-                "oegch,ehm->oegcm", activation=x, kernel=self.parameters["wo_weight"]
+                "...egch,ehm->...egcm", activation=x, kernel=self.parameters["wo_weight"]
             )
         x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["oegcm"])
 
         # Transpose from oegcm to ogecm format for combine operation.
         # TopKGating and Top2Gating both expect inputs in ogecm format.
         if cfg.gating.klass in [TopKGating, Top2Gating]:
-            x = jnp.einsum("oegcm->ogecm", x)
+            x = jnp.einsum("...egcm->...gecm", x)
             x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["ogecm"])
 
         # Support dynamic partition spec lookup for combine operation.
@@ -1806,7 +1813,7 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
             dispatch_tensor: Dispatch tensor used for dead neuron detection.
 
         Returns:
-            Activated tensor with shape [O, E, G, C, H].
+            Activated tensor with shape [..., E, G, C, H].
         """
         cfg = self.config
         if isinstance(cfg.activation, tuple):
@@ -1814,7 +1821,7 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
             for i, activation in enumerate(cfg.activation):
                 with child_context(f"wi_{i}_einsum", module=self):
                     x_i = self.einsum_maybe_quantized(
-                        "oegcm,emh->oegch", activation=x, kernel=self.parameters[f"wi_{i}_weight"]
+                        "...egcm,emh->...egch", activation=x, kernel=self.parameters[f"wi_{i}_weight"]
                     )
                 # Add dead neuron detection for TopKGating.
                 # This helps identify experts or neurons that are never activated, which can
@@ -1822,18 +1829,19 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
                 if cfg.gating.klass is TopKGating:
                     # valid_position_indicator: [E, C] - indicates which expert capacity slots
                     # actually contain valid tokens.
-                    valid_position_indicator = jnp.einsum("ogsec->ec", dispatch_tensor)
-                    # Broadcast to [O, E, G, C, H] to match x_i shape.
-                    valid_position_indicator = valid_position_indicator[
-                        jnp.newaxis, :, jnp.newaxis, :, jnp.newaxis
-                    ]
+                    valid_position_indicator = jnp.einsum("...sec->ec", dispatch_tensor)
+                    # Broadcast to match x_i shape [..., E, G, C, H].
+                    broadcast_shape = [1] * (x_i.ndim - 4) + [x_i.shape[-4], 1, x_i.shape[-2], 1]
+                    valid_position_indicator = valid_position_indicator.reshape(broadcast_shape)
                     invalid_position_indicator = 1 - valid_position_indicator
                     # Mask out invalid positions by subtracting a large value, so they don't
                     # contribute to the maximum.
                     x_i_prime = x_i - 10.0 * invalid_position_indicator
                     # Aggregate over the O, G, and C dimensions to get max activation per expert
                     # per hidden unit: [E, H].
-                    max_hidden_units = jnp.max(x_i_prime, axis=[0, 2, 3])
+                    # Sum axes: all axes except -4 (E) and -1 (H)
+                    sum_axes = list(range(x_i.ndim - 4)) + [x_i.ndim - 3, x_i.ndim - 2]
+                    max_hidden_units = jnp.max(x_i_prime, axis=sum_axes)
                     # Count neurons that never activate (remain below the masking threshold).
                     num_dead_units = jnp.count_nonzero(
                         jnp.less(max_hidden_units, -10.0).astype(jnp.int32)
@@ -1850,7 +1858,7 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
         else:
             with child_context("wi_einsum", module=self):
                 x = self.einsum_maybe_quantized(
-                    "oegcm,emh->oegch", activation=x, kernel=self.parameters["wi_weight"]
+                    "...egcm,emh->...egch", activation=x, kernel=self.parameters["wi_weight"]
                 )
             x = with_sharding_constraint(x, cfg.dim_to_mesh_axis_map["oegch"])
             return get_activation_fn(cfg.activation)(x)
