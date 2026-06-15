@@ -77,7 +77,7 @@ STEP_DTYPE = jnp.bfloat16
 
 # The default mesh-axis names for LM training, from least to most communication intensive.
 # See mesh_shape_from_axes() docstring for more details.
-MESH_AXIS_NAMES = ("pipeline", "data", "expert", "fsdp", "seq", "model")
+MESH_AXIS_NAMES = ("pipeline", "data", "fsdp", "expert", "seq", "model")
 
 
 def scaled_hidden_dim(scale: float, *, round_up_to_multiples_of: int = 256) -> FunctionConfigBase:
@@ -183,9 +183,9 @@ def mesh_shape_from_axes(
     Returns:
         A tuple describing the logical mesh shape (from least to most communication intensive).
     """
-    assert MESH_AXIS_NAMES == ("pipeline", "data", "expert", "fsdp", "seq", "model")
+    assert MESH_AXIS_NAMES == ("pipeline", "data", "fsdp", "expert", "seq", "model")
     # We set the minimum size for a mesh axis to 1 as anything lower is degenerate, except -1.
-    return tuple(max(x, 1) if x != -1 else -1 for x in [pipeline, data, expert, fsdp, seq, model])
+    return tuple(max(x, 1) if x != -1 else -1 for x in [pipeline, data, fsdp, expert, seq, model])
 
 
 def update_model_remat_config(
