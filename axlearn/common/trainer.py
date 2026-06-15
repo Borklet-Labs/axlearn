@@ -1150,13 +1150,21 @@ class SpmdTrainer(Module):
             # Run the compiled function.
             self._trainer_state, outputs = compiled_train_step_fn(self.trainer_state, input_batch)
 
+        print("--- DEBUG trainer.py outputs['loss']:", type(outputs["loss"]), outputs["loss"].shape, flush=True)
+        if "aux" in outputs:
+            for k, v in outputs["aux"].items():
+                print(f"--- DEBUG trainer.py outputs['aux'][{k}]: type={type(v)} shape={getattr(v, 'shape', 'no_shape')}", flush=True)
         n = self._config.log_every_n_steps or 100
         if self.step % n == 0 or 0 <= self.step <= 5:
-            self._step_log(
-                "loss=%s aux=%s",
-                outputs["loss"],
-                jax.tree.map(lambda x: x.item() if x.ndim == 0 else f"T{x.shape}", outputs["aux"]),
-            )
+            try:
+                mapped_aux = jax.tree.map(lambda x: x.item() if x.ndim == 0 else f"T{x.shape}", outputs["aux"])
+                self._step_log(
+                    "loss=%s aux=%s",
+                    outputs["loss"],
+                    mapped_aux,
+                )
+            except Exception as e:
+                print("--- DEBUG trainer.py FAILED logging:", str(e), flush=True)
 
         self.summary_writer(self.step, {"loss": outputs["loss"], **outputs["summaries"]})
         # Aggregate summaries across evalers.
