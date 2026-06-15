@@ -475,3 +475,36 @@ class BackendOverrideModifier(ConfigModifier):
 
         cfg.visit(visit_fn=visit_fn, enter_fn=enter_fn)
         return cfg
+
+
+class FlashAttentionShardingModifier(ConfigModifier):
+    """Modifies the mha_dim_to_partition_spec and output_dim_to_partition_spec of FlashAttention."""
+
+    @config_class
+    class Config(ConfigModifier.Config):
+        """Configures FlashAttentionShardingModifier."""
+
+        mha_dim_to_partition_spec: Optional[dict[str, Optional[PartitionSpec]]] = None
+        output_dim_to_partition_spec: Optional[dict[str, Optional[PartitionSpec]]] = None
+
+    def __call__(self, cfg: ConfigBase) -> ConfigBase:
+        mha_spec = self.config.mha_dim_to_partition_spec
+        output_spec = self.config.output_dim_to_partition_spec
+
+        def is_flash_config(cfg):
+            return isinstance(cfg, FlashAttention.Config)
+
+        def visit_fn(_, value):
+            if is_flash_config(value):
+                value = cast(FlashAttention.Config, value)
+                if mha_spec:
+                    value.mha_dim_to_partition_spec = mha_spec.copy()
+                if output_spec:
+                    value.output_dim_to_partition_spec = output_spec.copy()
+
+        def enter_fn(_, value, default_kv):
+            return None if is_flash_config(value) else default_kv
+
+        cfg.visit(visit_fn=visit_fn, enter_fn=enter_fn)
+        return cfg
+

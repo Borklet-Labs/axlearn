@@ -71,7 +71,7 @@ from axlearn.experiments.text.gpt.common import (
 from axlearn.experiments.text.gpt.common import model_config as common_model_config
 from axlearn.experiments.text.gpt.fuji import offload_attention_proj_policy
 from axlearn.experiments.trainer_config_utils import V7xFlashConfigModifier
-from axlearn.common.flash_attention.layer import FlashBlockSizeModifier
+from axlearn.common.flash_attention.layer import FlashBlockSizeModifier, FlashAttentionShardingModifier
 
 MODEL_SIZES = ("test", "Switch-Base", "Switch-Large", "Switch-XXL")
 
@@ -268,6 +268,17 @@ def get_trainer_kwargs(
                             ),
                             # Modify the GPU block-size for B200 platform (Pallas kernels)
                             FlashBlockSizeModifier.default_config().set(gpu_block_size=64),
+                            FlashAttentionShardingModifier.default_config().set(
+                                mha_dim_to_partition_spec={
+                                    "btnh": PartitionSpec(("data", "expert", "fsdp"), None, ("seq", "model"), None),
+                                    "bsnh": PartitionSpec(("data", "expert", "fsdp"), None, ("seq", "model"), None),
+                                    "bnts": PartitionSpec(("data", "expert", "fsdp"), None, None, None),
+                                },
+                                output_dim_to_partition_spec={
+                                    "btnh": PartitionSpec(("data", "expert", "fsdp"), "seq", "model", None),
+                                    "bnts": PartitionSpec(("data", "expert", "fsdp"), "model", "seq", None),
+                                },
+                            ),
                         ],
                     ),
                 ),

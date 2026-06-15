@@ -91,9 +91,11 @@ def setup(
                 process_id=process_id,
             )
             if jax_backend == "gpu":
-                # jax 0.4.34 introduced a change to cluster auto-detection behavior, supplying
-                # local_device_ids arg allows us to maintain expected behavior
-                init_kwargs["local_device_ids"] = list(range(8))
+                try:
+                    num_gpus = jax.local_device_count(backend="gpu")
+                except Exception:
+                    num_gpus = 8
+                init_kwargs["local_device_ids"] = list(range(num_gpus))
 
         jax.distributed.initialize(**init_kwargs)
         _jax_distributed_initialized = True
