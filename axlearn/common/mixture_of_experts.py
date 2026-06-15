@@ -626,6 +626,7 @@ class Top2Gating(BaseGating):
         spec_ogse = self._get_sharding_spec("ogse")
         spec_ogsc = self._get_sharding_spec("ogsc")
         spec_ogsec = self._get_sharding_spec("ogsec")
+        print(f"--- DETECTED Top2Gating.forward --- spec_ogse={spec_ogse} spec_ogsc={spec_ogsc} spec_ogsec={spec_ogsec}", flush=True)
 
         # OGSC tensor.
         b = jax.nn.one_hot(position_in_expert_1, expert_capacity, dtype=jnp.float32)
