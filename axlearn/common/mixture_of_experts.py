@@ -401,6 +401,33 @@ class BaseGating(BaseLayer):
         """
         raise NotImplementedError(type(self))
 
+    def _apply_sharding_constraints(
+        self, combine_tensor: Tensor, dispatch_tensor: Tensor
+    ) -> tuple[Tensor, Tensor]:
+        parent = self.parent
+        if parent is not None and hasattr(parent.config, "dim_to_mesh_axis_map"):
+            mesh_map = parent.config.dim_to_mesh_axis_map
+            # Use combine_tensor_shape class method if available, otherwise default to "ogsec".
+            if hasattr(self, "combine_tensor_shape"):
+                combine_spec_name = self.combine_tensor_shape()
+            else:
+                combine_spec_name = "ogsec"
+
+            if hasattr(self, "dispatch_tensor_shape"):
+                dispatch_spec_name = self.dispatch_tensor_shape()
+            else:
+                dispatch_spec_name = "ogsec"
+
+            if combine_spec_name in mesh_map and mesh_map[combine_spec_name] is not None:
+                combine_tensor = with_sharding_constraint(
+                    combine_tensor, mesh_map[combine_spec_name]
+                )
+            if dispatch_spec_name in mesh_map and mesh_map[dispatch_spec_name] is not None:
+                dispatch_tensor = with_sharding_constraint(
+                    dispatch_tensor, mesh_map[dispatch_spec_name]
+                )
+        return combine_tensor, dispatch_tensor
+
     @nowrap
     def dispatch(
         self,
@@ -603,6 +630,10 @@ class Top2Gating(BaseGating):
         combine_tensor = first_part_of_combine_tensor + second_part_of_combine_tensor
         # OGSEC tensor.
         dispatch_tensor = combine_tensor.astype(bool)
+
+        combine_tensor, dispatch_tensor = self._apply_sharding_constraints(
+            combine_tensor, dispatch_tensor
+        )
 
         # Counts for tokens that are dispatched to 0, 1 and 2 experts.
         dispatch_count_tensor = jnp.sum(dispatch_tensor.astype(jnp.int32), [-2, -1])
@@ -987,6 +1018,10 @@ class TopKGating(BaseGating):
             self.add_summary("load_balance_loss_original", load_balance_loss)
             load_balance_loss *= self.adaptive_load_balance_loss(over_capacity_ratio)
             self.add_summary("load_balance_loss", load_balance_loss)
+
+        combine_tensor, dispatch_tensor = self._apply_sharding_constraints(
+            combine_tensor, dispatch_tensor
+        )
 
         return self.Output(
             combine_tensor=combine_tensor,
@@ -1647,18 +1682,8 @@ class TransformerFeedForwardMoE(DenseGeneralBaseLayer):
         # stable performance.
         gating = self.gating(logits=logits.astype(jnp.float32))
 
-        # Support dynamic partition spec lookup for different gating implementations.
-        # If the gating class has dispatch_tensor_shape() method, use it to get the correct
-        # partition spec. Otherwise, fall back to "ogsec" for backward compatibility.
-        if hasattr(cfg.gating.klass, "dispatch_tensor_shape"):
-            dispatch_partition_spec = cfg.dim_to_mesh_axis_map[
-                cfg.gating.klass.dispatch_tensor_shape()
-            ]
-        else:
-            dispatch_partition_spec = cfg.dim_to_mesh_axis_map["ogsec"]
-
-        combine_tensor = with_sharding_constraint(gating.combine_tensor, dispatch_partition_spec)
-        dispatch_tensor = with_sharding_constraint(gating.dispatch_tensor, dispatch_partition_spec)
+        combine_tensor = gating.combine_tensor
+        dispatch_tensor = gating.dispatch_tensor
         # Collect aux_loss.
         aux_loss = (
             gating.load_balance_loss * cfg.load_balance_loss_weight
