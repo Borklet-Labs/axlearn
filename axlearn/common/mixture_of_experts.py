@@ -401,31 +401,41 @@ class BaseGating(BaseLayer):
         """
         raise NotImplementedError(type(self))
 
-    def _apply_sharding_constraints(
-        self, combine_tensor: Tensor, dispatch_tensor: Tensor
-    ) -> tuple[Tensor, Tensor]:
+    def _get_sharding_spec(self, name: str) -> Optional[PartitionSpec]:
         parent = self.parent
         if parent is not None and hasattr(parent.config, "dim_to_mesh_axis_map"):
             mesh_map = parent.config.dim_to_mesh_axis_map
-            # Use combine_tensor_shape class method if available, otherwise default to "ogsec".
-            if hasattr(self, "combine_tensor_shape"):
-                combine_spec_name = self.combine_tensor_shape()
-            else:
-                combine_spec_name = "ogsec"
+            if name in mesh_map:
+                return mesh_map[name]
 
-            if hasattr(self, "dispatch_tensor_shape"):
-                dispatch_spec_name = self.dispatch_tensor_shape()
-            else:
-                dispatch_spec_name = "ogsec"
+            # Dynamically derive 4D specs from 5D "ogsec"
+            if "ogsec" in mesh_map and mesh_map["ogsec"] is not None:
+                spec_ogsec = mesh_map["ogsec"]
+                if name in ("ogse", "ogsc"):
+                    return PartitionSpec(*spec_ogsec[:4])
+        return None
 
-            if combine_spec_name in mesh_map and mesh_map[combine_spec_name] is not None:
-                combine_tensor = with_sharding_constraint(
-                    combine_tensor, mesh_map[combine_spec_name]
-                )
-            if dispatch_spec_name in mesh_map and mesh_map[dispatch_spec_name] is not None:
-                dispatch_tensor = with_sharding_constraint(
-                    dispatch_tensor, mesh_map[dispatch_spec_name]
-                )
+    def _apply_sharding_constraints(
+        self, combine_tensor: Tensor, dispatch_tensor: Tensor
+    ) -> tuple[Tensor, Tensor]:
+        # Use combine_tensor_shape class method if available, otherwise default to "ogsec".
+        if hasattr(self, "combine_tensor_shape"):
+            combine_spec_name = self.combine_tensor_shape()
+        else:
+            combine_spec_name = "ogsec"
+
+        if hasattr(self, "dispatch_tensor_shape"):
+            dispatch_spec_name = self.dispatch_tensor_shape()
+        else:
+            dispatch_spec_name = "ogsec"
+
+        combine_spec = self._get_sharding_spec(combine_spec_name)
+        dispatch_spec = self._get_sharding_spec(dispatch_spec_name)
+
+        if combine_spec is not None:
+            combine_tensor = with_sharding_constraint(combine_tensor, combine_spec)
+        if dispatch_spec is not None:
+            dispatch_tensor = with_sharding_constraint(dispatch_tensor, dispatch_spec)
         return combine_tensor, dispatch_tensor
 
     @nowrap
@@ -525,6 +535,9 @@ class Top2Gating(BaseGating):
         if logits.dtype != jnp.float32:
             logits = logits.astype(jnp.float32)
         logits = _cap_logits(logits, cfg.gating_logit_cap)
+        logits_spec = self._get_sharding_spec("ogse")
+        if logits_spec is not None:
+            logits = with_sharding_constraint(logits, logits_spec)
         raw_gates = jax.nn.softmax(logits, axis=-1)  # along E dim
 
         expert_capacity = _compute_expert_capacity(
@@ -610,12 +623,19 @@ class Top2Gating(BaseGating):
         gate_1 *= mask_1_flat.astype(gate_1.dtype)
         gate_2 *= mask_2_flat.astype(gate_2.dtype)
 
+        spec_ogse = self._get_sharding_spec("ogse")
+        spec_ogsc = self._get_sharding_spec("ogsc")
+
         # OGSC tensor.
         b = jax.nn.one_hot(position_in_expert_1, expert_capacity, dtype=jnp.float32)
         # OGSE tensor.
         a = jnp.expand_dims(gate_1 * mask_1_flat.astype(jnp.float32), axis=-1) * jax.nn.one_hot(
             index_1, cfg.num_experts, dtype=jnp.float32
         )
+        if spec_ogse is not None:
+            a = with_sharding_constraint(a, spec_ogse)
+        if spec_ogsc is not None:
+            b = with_sharding_constraint(b, spec_ogsc)
         # OGSEC tensor.
         first_part_of_combine_tensor = jnp.einsum("ogse,ogsc->ogsec", a, b)
 
@@ -625,6 +645,10 @@ class Top2Gating(BaseGating):
         a = jnp.expand_dims(gate_2 * mask_2_flat, axis=-1) * jax.nn.one_hot(
             index_2, cfg.num_experts, dtype=jnp.float32
         )
+        if spec_ogse is not None:
+            a = with_sharding_constraint(a, spec_ogse)
+        if spec_ogsc is not None:
+            b = with_sharding_constraint(b, spec_ogsc)
         second_part_of_combine_tensor = jnp.einsum("ogse,ogsc->ogsec", a, b)
         # OGSEC tensor.
         combine_tensor = first_part_of_combine_tensor + second_part_of_combine_tensor
@@ -908,8 +932,10 @@ class TopKGating(BaseGating):
         num_experts_per_token = cfg.num_experts_per_token
 
         # Process logits: upcast to float32, cap, and optionally add noise.
-        # [O, G, S, E]
         logits = self._process_logits(logits)
+        logits_spec = self._get_sharding_spec("ogse")
+        if logits_spec is not None:
+            logits = with_sharding_constraint(logits, logits_spec)
 
         # Get the router z-loss.
         router_z_loss = _router_z_loss(logits)
@@ -988,6 +1014,9 @@ class TopKGating(BaseGating):
 
         # Sum over K to get dispatch tensor: [O, G, S, E, C]
         dispatch_tensor = jnp.sum(position_in_each_expert_indicator, axis=2)
+        dispatch_spec = self._get_sharding_spec("ogsec")
+        if dispatch_spec is not None:
+            dispatch_tensor = with_sharding_constraint(dispatch_tensor, dispatch_spec)
 
         # Compute combine tensor by weighting the dispatch tensor.
         # We need to normalize raw_gates by the sum of selected gate weights.
