@@ -2159,7 +2159,7 @@ class A4XMaxReplicatedJob(GPUReplicatedJob):
 
         env_vars.update(
             {
-                "LD_LIBRARY_PATH": "/usr/local/cuda-13.0/compat:/usr/local/gib/lib64:/usr/local/nvidia/lib64",
+                "LD_LIBRARY_PATH": "/usr/local/gib/lib64:/usr/local/nvidia/lib64",
                 "CUDA_DEVICE_MAX_CONNECTIONS": "1",
                 "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.92",
                 "TF_FORCE_GPU_ALLOW_GROWTH": "true",
