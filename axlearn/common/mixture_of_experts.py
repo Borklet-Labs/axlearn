@@ -625,6 +625,7 @@ class Top2Gating(BaseGating):
 
         spec_ogse = self._get_sharding_spec("ogse")
         spec_ogsc = self._get_sharding_spec("ogsc")
+        spec_ogsec = self._get_sharding_spec("ogsec")
 
         # OGSC tensor.
         b = jax.nn.one_hot(position_in_expert_1, expert_capacity, dtype=jnp.float32)
@@ -638,6 +639,10 @@ class Top2Gating(BaseGating):
             b = with_sharding_constraint(b, spec_ogsc)
         # OGSEC tensor.
         first_part_of_combine_tensor = jnp.einsum("ogse,ogsc->ogsec", a, b)
+        if spec_ogsec is not None:
+            first_part_of_combine_tensor = with_sharding_constraint(
+                first_part_of_combine_tensor, spec_ogsec
+            )
 
         # OGSC tensor.
         b = jax.nn.one_hot(position_in_expert_2, expert_capacity, dtype=jnp.float32)
@@ -650,6 +655,10 @@ class Top2Gating(BaseGating):
         if spec_ogsc is not None:
             b = with_sharding_constraint(b, spec_ogsc)
         second_part_of_combine_tensor = jnp.einsum("ogse,ogsc->ogsec", a, b)
+        if spec_ogsec is not None:
+            second_part_of_combine_tensor = with_sharding_constraint(
+                second_part_of_combine_tensor, spec_ogsec
+            )
         # OGSEC tensor.
         combine_tensor = first_part_of_combine_tensor + second_part_of_combine_tensor
         # OGSEC tensor.
@@ -741,7 +750,11 @@ class Top2Gating(BaseGating):
         """
         combine_tensor = combine_tensor.astype(dtype)
         combine_tensor = with_sharding_constraint(combine_tensor, partition_spec)
-        return jnp.einsum("ogecm,ogsec->ogsm", inputs, combine_tensor)
+        out = jnp.einsum("ogecm,ogsec->ogsm", inputs, combine_tensor)
+        spec_ogsm = self._get_sharding_spec("ogsm")
+        if spec_ogsm is not None:
+            out = with_sharding_constraint(out, spec_ogsm)
+        return out
 
 
 class TopKGating(BaseGating):
