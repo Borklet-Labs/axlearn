@@ -103,6 +103,8 @@ MOE_DIM_TO_MESH_AXIS_MAP = {
     "ogsm": PartitionSpec(*MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, "model"),
     # Dispatch and combine tensors.
     "ogsec": PartitionSpec(*MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, None),
+    "ogse": PartitionSpec(*MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
+    "ogsc": PartitionSpec(*MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None),
     "oegcm": PartitionSpec(*MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, "model"),
     "ogecm": PartitionSpec(*MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, "model"),
     "oegch": PartitionSpec(*MOE_OUTER_BATCH_AXIS_NAMES, "expert", None, None, "model"),
