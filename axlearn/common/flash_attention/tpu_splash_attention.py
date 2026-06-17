@@ -225,7 +225,7 @@ def flash_attention_kernel(
         if rem != 0:
             raise NotImplementedError(f"{bkv_compute=} should be a multiple of {NUM_LANES}")
 
-        s_curr = jnp.exp(qk - pltpu.repeat(m_next, bkv_repeats, axis=1))
+        s_curr = jnp.exp(qk - jnp.repeat(m_next, bkv_repeats, axis=1))
         assert s_curr.shape == (bq, bkv_compute)
 
         l_curr = jax.lax.broadcast_in_dim(s_curr.sum(axis=-1), l_prev.shape, (0,))
@@ -256,7 +256,7 @@ def flash_attention_kernel(
             s_curr = jnp.where(dropout_mask, 0.0, s_curr) / (1.0 - dropout_rate)
         o_curr = lax.dot_general(s_curr, v, sv_dims)
 
-        alpha_o = pltpu.repeat(alpha, head_dim_repeats, axis=1)[..., : o_scratch_ref.shape[-1]]
+        alpha_o = jnp.repeat(alpha, head_dim_repeats, axis=1)[..., : o_scratch_ref.shape[-1]]
         o_scratch_ref[:] = alpha_o * o_scratch_ref[:] + o_curr
 
     @pl.when(should_run)
@@ -271,7 +271,7 @@ def flash_attention_kernel(
         if logit_sink_ref is not None:
             sink_value = logit_sink_ref[h].astype(jnp.float32)
             l = l + jnp.exp(sink_value - m_scratch_ref[...])
-        l_inv = pltpu.repeat(1.0 / l, head_dim_repeats, axis=1)[..., : o_scratch_ref.shape[-1]]
+        l_inv = jnp.repeat(1.0 / l, head_dim_repeats, axis=1)[..., : o_scratch_ref.shape[-1]]
         o_ref[...] = (o_scratch_ref[...] * l_inv).astype(o_ref.dtype)
         if logsumexp_ref is not None:
             assert logsumexp_ref.shape == (bq, NUM_LANES)
