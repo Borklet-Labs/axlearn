@@ -1391,7 +1391,7 @@ class SelectExtendedMeshConfigTest(test_utils.TestCase):
         # Check if gradient accumulation is set up.
         self.assertRegex(str(cfg.learner.forward_fn_transformation), "steps: 4")
         # Check if remat policy is set up.
-        self.assertRegex(str(cfg.model.linear), "dots_saveable")
+        self.assertRegex(str(cfg.model.linear), "only_if_no_batch_dims")
 
 
 class CompatibilityTest(test_utils.TestCase):
