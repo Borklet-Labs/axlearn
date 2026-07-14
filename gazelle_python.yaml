@@ -182,6 +182,7 @@ manifest:
     joblib: joblib
     keras: keras
     kubernetes: kubernetes
+    libtpu: libtpu
     markdown: markdown
     markdown_it: markdown_it_py
     markupsafe: markupsafe
@@ -262,6 +263,7 @@ manifest:
     tensorboard: tensorboard
     tensorboardX: tensorboardx
     tensorboard_data_server: tensorboard_data_server
+    tensorboard_plugin_profile: tensorboard_plugin_profile
     tensorflow: tensorflow
     tensorflow_datasets: tensorflow_datasets
     tensorflow_io: tensorflow_io
@@ -301,4 +303,4 @@ manifest:
     zipp: zipp
   pip_repository:
     name: axlearn_pip
-integrity: 57655d3b463bc7822ab2524063d6b72ea9b371baa4fc4b3390cbe27cc4db9ac0
+integrity: 7f3c46aca71b9a954f0fb011c627260592fbdd6e276fc89ccc96218d804fa741

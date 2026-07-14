@@ -27,7 +27,6 @@ import tokamax
 from absl import logging
 from jax import lax
 from jax.experimental.pjit import pjit
-from jax.interpreters.pxla import thread_resources
 
 import axlearn.common.megablock.ops as mblx
 from axlearn.common.attention import NormPosition
@@ -803,15 +802,17 @@ class TopKGating(BaseGating):
 
         return gate_weights, gate_assignment
 
-    def _compute_index(self, raw_gates: Tensor, *, k: int) -> Tensor:
-        """Selects the routed experts: returns expert indices of shape ``[..., k]``.
+    def _compute_gates(self, raw_gates: Tensor, *, k: int) -> Tuple[Tensor, Tensor]:
+        """Selects the routed experts: returns ``(gate_weights, gate_assignment)``, each of
+        shape ``[..., k]``.
 
-        Default is the natural top-k (`_top_k`, which uses a configured `topk_fn`). A
-        subclass may override this to force a fixed expert assignment; `forward` recomputes
-        the gate weights from the current `raw_gates` (``take_along_axis``) so gradients
-        still flow through the logits.
+        Default is the natural top-k via `_top_k` (honoring a configured `topk_fn`), which
+        returns the selected weights *and* their indices together. A subclass may override
+        this to force a fixed or adjusted-gate assignment; since the indices carry no
+        gradient, it must read the weights from `raw_gates` (e.g. via ``take_along_axis``)
+        to keep gradients flowing to the logits.
         """
-        return self._top_k(raw_gates, k=k)[1]
+        return self._top_k(raw_gates, k=k)
 
     def _score(self, logits: Tensor, axis: int = -1) -> Tensor:
         """Computes scores from logits using configured score_fn or default softmax."""
@@ -935,11 +936,10 @@ class TopKGating(BaseGating):
         # Get the expert capacity.
         expert_capacity = self._get_expert_capacity(group_size=logits.shape[-2])
 
-        # Select top-k experts for each token (overridable; default = `_top_k`), then
-        # recompute the gate weights from the current logits so gradients flow through them.
+        # Select top-k experts for each token (overridable; default = `_top_k`, which
+        # returns the selected weights and their indices together).
         # gate_assignment: [O, G, S, K], gate_weights: [O, G, S, K]
-        gate_assignment = self._compute_index(raw_gates, k=num_experts_per_token)
-        gate_weights = jnp.take_along_axis(raw_gates, gate_assignment, axis=-1)
+        gate_weights, gate_assignment = self._compute_gates(raw_gates, k=num_experts_per_token)
         # Preserve the [O, G, S, K] shape for the Output before downstream reshapes.
         original_gate_assignment = gate_assignment
 
@@ -1201,11 +1201,10 @@ class TopKDropFreeGating(TopKGating):
         # [B, S, E]
         raw_gates = self._score(logits, axis=-1)  # along E dim if needed.
 
-        # Configurable top-K selection (overridable; default = `_top_k`), then recompute
-        # the gate weights from the current logits so gradients flow through them.
+        # Configurable top-K selection (overridable; default = `_top_k`, which returns the
+        # selected weights and their indices together).
         # [B, S, K], [B, S, K]
-        gate_assignment = self._compute_index(raw_gates, k=cfg.num_experts_per_token)
-        gate_weights = jnp.take_along_axis(raw_gates, gate_assignment, axis=-1)
+        gate_weights, gate_assignment = self._compute_gates(raw_gates, k=cfg.num_experts_per_token)
 
         # Get the expert load balance loss.
         # This considers the load balance of all the top-k selected experts.
@@ -1328,14 +1327,15 @@ class TopKBiasGating(TopKDropFreeGating):
         if cfg.num_group_of_experts == 1 and cfg.topk_group == 1:
             # Simple routing on the unreshaped [B, S, E] scores. Selection is overridable
             # (default = `_top_k`, which also runs the aux-loss-free gating-bias update in
-            # training). A subclass that overrides `_compute_index` to force the routing
+            # training). A subclass that overrides `_compute_gates` to force the routing
             # therefore also skips the bias update — the bias adapts load only for natural
             # routing. Such a subclass must use simple routing; group routing below is
             # natural-only.
             router_z_loss = _router_z_loss(logits)
             self.add_summary("router_z_loss", router_z_loss)
-            gate_assignment = self._compute_index(raw_gates, k=cfg.num_experts_per_token)
-            gate_weights = jnp.take_along_axis(raw_gates, gate_assignment, axis=-1)
+            gate_weights, gate_assignment = self._compute_gates(
+                raw_gates, k=cfg.num_experts_per_token
+            )
             load_balance_loss = self._load_balance_loss(
                 raw_gates=raw_gates,
                 gate_assignment=gate_assignment,
@@ -2614,7 +2614,7 @@ class TransformerFeedForwardDropFreeMoE(TransformerFeedForwardMoE):
         # [K, B, S, M']: K unsharded (None) at the front (K-outermost combine layout).
         kbsm_out_spec = PartitionSpec(None, *bsm_out_spec[:2], bsm_out_spec[2])
 
-        mesh = thread_resources.env.physical_mesh
+        mesh = get_current_abstract_or_physical_mesh()
 
         # `jax.jit` is required because `jax.checkpoint` below is a `closed_call` that
         # `shard_map` can't evaluate eagerly. Nested under an outer `jit` (production case)
@@ -2715,7 +2715,8 @@ class TransformerFeedForwardDropFreeMoE(TransformerFeedForwardMoE):
 
             # [B' x S x K, M]
             sorted_output = self._padded_gmm(intermediate, wo, tokens_per_expert)
-            if thread_resources.env.physical_mesh.shape["model"] > 1:
+            mesh = get_current_abstract_or_physical_mesh()
+            if mesh.shape["model"] > 1:
                 # Reduce-scatter if output is "model"-sharded; otherwise allreduce.
                 spec = cfg.output_dim_to_partition_spec["bsm"][2]
                 if spec and "model" in spec:
@@ -2789,7 +2790,7 @@ class ApproximateTokenDropFreeMoE(TransformerFeedForwardDropFreeMoE):
 
     def _has_track_axis(self) -> bool:
         """Check if we're in a vmap context with track axis (VectorizedTrackTransformerLayer)."""
-        mesh = thread_resources.env.physical_mesh
+        mesh = get_current_abstract_or_physical_mesh()
         return "track" in mesh.axis_names if mesh.axis_names else False
 
     def _dispatch_hook(

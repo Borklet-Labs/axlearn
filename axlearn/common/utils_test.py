@@ -22,7 +22,7 @@ from jax import numpy as jnp
 from jax._src.sharding_impls import get_process_index_and_count
 from jax.ad_checkpoint import checkpoint_policies as jax_remat_policies
 from jax.experimental import checkify, mesh_utils
-from jax.sharding import PartitionSpec
+from jax.sharding import AxisType, PartitionSpec
 
 from axlearn.common import flax_struct, learner, optimizers, serialization, utils
 from axlearn.common.aot_compilation import get_devices_for_topology, reshape_devices
@@ -1072,6 +1072,20 @@ class SimilarNamesTest(TestCase):
         self.assertEqual(similar_names(name, candidates), expected)
 
 
+def _auto_mesh(axis_shapes: Sequence[int], axis_names: Sequence[str]) -> jax.sharding.Mesh:
+    """Builds a mesh with Auto-typed axes, matching production (`jax.sharding.Mesh`).
+
+    JAX 0.10 flipped `jax.make_mesh`'s default axis type from `Auto` to `Explicit`. AXLearn
+    production builds meshes via `jax.sharding.Mesh(...)` (still Auto), where
+    `with_sharding_constraint` / `maybe_shard` and sharded-contracting einsums work. Explicit
+    axes reject those APIs (they require `jax.reshard` under an abstract-mesh context), so these
+    tests pin `Auto` to exercise the same regime production does.
+    """
+    return jax.make_mesh(
+        tuple(axis_shapes), tuple(axis_names), axis_types=(AxisType.Auto,) * len(axis_names)
+    )
+
+
 class ActivationShardingConstraintTest(TestCase):
     """Tests `maybe_shard`, `manual_axes_to_none`, and `_manual_axes_to_unconstrained`.
 
@@ -1088,7 +1102,7 @@ class ActivationShardingConstraintTest(TestCase):
         """The strict `with_sharding_constraint` rejects Manual axes."""
         if not is_supported_mesh_shape((4, 2)):
             self.skipTest("Unsupported mesh shape")
-        mesh = jax.make_mesh((4, 2), ("data", "model"))
+        mesh = _auto_mesh((4, 2), ("data", "model"))
 
         @jax.jit
         @partial(
@@ -1110,7 +1124,7 @@ class ActivationShardingConstraintTest(TestCase):
         """`maybe_shard` downgrades Manual axes and compiles."""
         if not is_supported_mesh_shape((4, 2)):
             self.skipTest("Unsupported mesh shape")
-        mesh = jax.make_mesh((4, 2), ("data", "model"))
+        mesh = _auto_mesh((4, 2), ("data", "model"))
 
         @jax.jit
         @partial(
@@ -1135,7 +1149,7 @@ class ActivationShardingConstraintTest(TestCase):
         """Tuple-axis entries with one Manual member, and an all-Manual entry."""
         if not is_supported_mesh_shape((4, 2)):
             self.skipTest("Unsupported mesh shape")
-        mesh = jax.make_mesh((4, 2), ("data", "model"))
+        mesh = _auto_mesh((4, 2), ("data", "model"))
 
         @jax.jit
         @partial(
@@ -1171,7 +1185,7 @@ class ActivationShardingConstraintTest(TestCase):
         """
         if not is_supported_mesh_shape((4, 2)):
             self.skipTest("Unsupported mesh shape")
-        mesh = jax.make_mesh((4, 2), ("data", "model"))
+        mesh = _auto_mesh((4, 2), ("data", "model"))
         with mesh:
             out = jax.jit(lambda x: utils.maybe_shard(x, partition_spec))(jnp.ones((4, 2)))
         self.assertEqual(out.addressable_shards[0].data.shape, expected_shard_shape)
@@ -1189,7 +1203,7 @@ class ActivationShardingConstraintTest(TestCase):
         """For pytree-structured specs, callers use `jax.tree.map(maybe_shard, x, spec_tree)`."""
         if not is_supported_mesh_shape((4, 2)):
             self.skipTest("Unsupported mesh shape")
-        mesh = jax.make_mesh((4, 2), ("data", "model"))
+        mesh = _auto_mesh((4, 2), ("data", "model"))
 
         x_tree = (jnp.ones((4, 2)), jnp.ones((4, 2)))
         spec_tree = (PartitionSpec("data", "model"), PartitionSpec("data", None))
@@ -1213,7 +1227,7 @@ class ActivationShardingConstraintTest(TestCase):
         (used for shard_map `in_specs` / `out_specs`, which reject `UNCONSTRAINED`)."""
         if not is_supported_mesh_shape((4, 2)):
             self.skipTest("Unsupported mesh shape")
-        mesh = jax.make_mesh((4, 2), ("data", "model"))
+        mesh = _auto_mesh((4, 2), ("data", "model"))
         captured: dict = {}
 
         @jax.jit
@@ -1260,7 +1274,7 @@ class ActivationShardingConstraintTest(TestCase):
         (used to keep specs valid for `with_sharding_constraint`)."""
         if not is_supported_mesh_shape((4, 2)):
             self.skipTest("Unsupported mesh shape")
-        mesh = jax.make_mesh((4, 2), ("data", "model"))
+        mesh = _auto_mesh((4, 2), ("data", "model"))
         captured: dict = {}
 
         @jax.jit
@@ -1289,7 +1303,7 @@ class ActivationShardingConstraintTest(TestCase):
         """
         if not is_supported_mesh_shape((4, 2)):
             self.skipTest("Unsupported mesh shape")
-        mesh = jax.make_mesh((4, 2), ("data", "model"))
+        mesh = _auto_mesh((4, 2), ("data", "model"))
 
         @jax.jit
         @partial(
@@ -1314,7 +1328,7 @@ class ActivationShardingConstraintTest(TestCase):
         """
         if not is_supported_mesh_shape((4, 2)):
             self.skipTest("Unsupported mesh shape")
-        mesh = jax.make_mesh((4, 2), ("data", "model"))
+        mesh = _auto_mesh((4, 2), ("data", "model"))
 
         @jax.jit
         @partial(
@@ -1868,13 +1882,14 @@ class DummyDevice:
     platform: str
     device_kind: str
     process_index: int
+    id: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
 class DummyTpuDevice(DummyDevice):
     """Mock TPU device for testing."""
 
-    coords: Sequence[int]
+    coords: Sequence[int] = dataclasses.field(default_factory=tuple)
     core_on_chip: int = 0
 
 
@@ -1932,6 +1947,7 @@ class DeviceMeshTest(TestCase):
                 device_kind="TPU v4",
                 process_index=ix // 4,
                 coords=coord,
+                id=ix,
             )
             for ix, coord in enumerate(coords)
         ]
@@ -1999,6 +2015,7 @@ class DeviceMeshTest(TestCase):
                 process_index=(len(coords) * slice_index + ix) // 4,
                 coords=coord,
                 slice_index=slice_index,
+                id=len(coords) * slice_index + ix,
             )
             for ix, coord in enumerate(coords)
             for slice_index in range(num_slices)
@@ -2106,6 +2123,7 @@ class DeviceMeshTest(TestCase):
                 process_index=(len(coords) * slice_index + ix) // 4,
                 coords=coord,
                 slice_index=slice_index,
+                id=len(coords) * slice_index + ix,
             )
             for ix, coord in enumerate(coords)
             for slice_index in range(num_slices)
@@ -2192,6 +2210,7 @@ class DeviceMeshTest(TestCase):
                 platform="gpu",
                 device_kind="gpu",
                 process_index=(num_gpus_per_process * granule_index + ix) // num_gpus_per_process,
+                id=num_gpus_per_process * granule_index + ix,
             )
             for ix in range(num_gpus_per_process)
             for granule_index in range(num_granules)

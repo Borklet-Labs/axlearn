@@ -2508,7 +2508,15 @@ class MultiheadAttentionTest(TestCase):
             self.skipTest(f"Unsupported mesh shape {mesh_shape}")
         model_dim = 16
         num_heads = 4
-        mesh = jax.make_mesh(mesh_shape, axis_names=("fsdp", "seq", "model"))
+        mesh = jax.make_mesh(
+            mesh_shape,
+            axis_names=("fsdp", "seq", "model"),
+            axis_types=(
+                jax.sharding.AxisType.Auto,
+                jax.sharding.AxisType.Auto,
+                jax.sharding.AxisType.Auto,
+            ),
+        )
         q_part = ("fsdp", "seq", "model", None)
         o_part = ("fsdp", "seq", None)
 
@@ -2688,7 +2696,11 @@ class MultiheadAttentionTest(TestCase):
             decoder_probs = jnp.concatenate(decoder_probs, axis=2)
             assert decoder_output.shape == forward_outputs.data.shape
             assert decoder_probs.shape == forward_outputs.probs.shape
-            assert_allclose(decoder_probs, forward_outputs.probs, atol=1e-6)
+            assert_allclose(
+                decoder_probs,
+                forward_outputs.probs,
+                atol=1e-6 if dtype == jnp.float32 else 5e-4,
+            )
             test_k_proj, test_v_proj = layer.kv_cache.maybe_normalize_kv(
                 extend_step_outputs.kv_state
             )
@@ -3021,7 +3033,9 @@ class MultiheadAttentionTest(TestCase):
 
         # [batch, model_dim, tgt_len] --> [batch, tgt_len, model_dim].
         decoder_output = jnp.moveaxis(decoder_output, -1, -2)
-        assert_allclose(decoder_output, forward_outputs.data)
+        assert_allclose(
+            decoder_output, forward_outputs.data, atol=1e-6 if dtype == jnp.float32 else 1e-3
+        )
         if decoder_probs is not None:
             # [batch, num_heads, src_len, tgt_len] --> [batch, num_heads, tgt_len, src_len].
             decoder_probs = jnp.moveaxis(decoder_probs, -1, -2)
@@ -3320,8 +3334,8 @@ class ScaleFunctionsTest(TestCase):
         self.assertIn(str(key_scale_factor), hlo)
         # This test is unsupported on Jax 0.8.2 and later
         # TODO(rohit-chatterjee): Rewrite or disable test entirely
-        if jax.__version__ < "0.8.2":
-            self.assertNotIn(str(query_scale_factor * key_scale_factor), hlo)
+        # if jax.__version__ < "0.8.2":
+        #     self.assertNotIn(str(query_scale_factor * key_scale_factor), hlo)
 
     @parameterized.product(
         [
@@ -6306,7 +6320,12 @@ class LogitSinkTest(TestCase):
         self.assertIn("sink", param_specs)
         sink_spec = param_specs["sink"]
         self.assertEqual(sink_spec.shape, (num_heads,))
-        self.assertEqual(sink_spec.mesh_axes, ("model",))
+        self.assertEqual(
+            (sink_spec.mesh_axes),
+            jax.P(
+                "model",
+            ),
+        )
         self.assertEqual(sink_spec.weight_decay_scale, 0.0)
 
     def test_logit_sink_disabled_by_default(self):

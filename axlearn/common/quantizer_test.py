@@ -17,7 +17,7 @@ import numpy as np
 from absl.testing import absltest, parameterized
 
 # pylint: disable-next=protected-access
-from jax._src import prng as prng_interal
+from jax._src.random import threefry2x32 as prng_interal
 
 from axlearn.common import schedule
 from axlearn.common.module import functional as F

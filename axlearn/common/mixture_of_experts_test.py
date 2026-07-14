@@ -2233,15 +2233,23 @@ def _forced_gating(gating_cls, forced):
     """A test-local subclass of ``gating_cls`` whose routing is forced to ``forced``.
 
     Stands in for a subclass that installs a fixed expert assignment from an external
-    context: it overrides the single ``_compute_index`` hook every gating exposes and
-    inherits the natural ``forward()`` otherwise. ``forced`` is the expert-index tensor of
-    shape ``[..., K]``.
+    context. ``Top2Gating`` exposes the index-only ``_compute_index`` hook (its weights
+    come from an einsum), while the top-k family exposes ``_compute_gates`` (weights +
+    index). We override both so one helper covers every gating class; each class only
+    calls the hook it uses. ``forced`` is the expert-index tensor of shape ``[..., K]``.
     """
 
     class _Forced(gating_cls):
+        # Top2Gating: index-only hook; forward recomputes weights via einsum.
         def _compute_index(self, raw_gates, *, k):
             del raw_gates, k
             return forced
+
+        # Top-k family: return the forced index with weights gathered from the current
+        # raw_gates, so gradients still flow through the logits.
+        def _compute_gates(self, raw_gates, *, k):
+            del k
+            return jnp.take_along_axis(raw_gates, forced, axis=-1), forced
 
     return _Forced
 
@@ -2345,7 +2353,7 @@ class GateAssignmentOverrideTest(TestCase):
 
     def test_bias_gating_freezes_bias_under_override(self):
         # The aux-loss-free bias adapts from the *selected* experts in training. An
-        # overriding subclass overrides _compute_index and never calls _top_k, so the bias
+        # overriding subclass overrides _compute_gates and never calls _top_k, so the bias
         # update is skipped — otherwise it would fight the forced routing.
         num_experts, k = 8, 2
         logits = jax.random.uniform(jax.random.PRNGKey(1), (2, 8, num_experts))

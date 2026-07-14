@@ -767,5 +767,8 @@ py_test(
         ":vertexai_tensorboard",
         "@axlearn_pip//absl_py",
         "@axlearn_pip//google_cloud_aiplatform",
+        "@axlearn_pip//tensorboard",
+        "@axlearn_pip//tensorboard_plugin_profile",
+        "@axlearn_pip//xprof",
     ],
 )

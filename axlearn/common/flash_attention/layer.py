@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from absl import logging
-from jax.interpreters.pxla import thread_resources
+from jax._src.mesh import thread_resources
 from jax.sharding import PartitionSpec
 
 from axlearn.common.attention import Dropout, ForwardMode, GroupedQueryAttention, KVState
@@ -126,7 +126,6 @@ class FlashAttention(GroupedQueryAttention):
         if len(global_mesh.devices):
             backend = global_mesh.devices.flat[0].platform
         else:
-            # Fall back to jax.default_backend() if no device is found in physical_mesh.
             backend = jax.default_backend()
         return backend
 
@@ -167,6 +166,7 @@ class FlashAttention(GroupedQueryAttention):
         cfg: FlashAttention.Config = self.config
         partition_spec = cfg.mha_dim_to_partition_spec["bsnh"]
         global_mesh = thread_resources.env.physical_mesh
+
         if (
             partition_spec == PartitionSpec(None)
             or len(partition_spec) != 4

@@ -147,7 +147,12 @@ def clean_hlo(hlo: str) -> str:
     escaped_str = '"' + r"""([^"\\]|\\\\|\\")*""" + '"'
     metadata_value = "(" + escaped_str + "|" + r"\d+" + ")"
     pattern = r"metadata=\{(\w+=" + metadata_value + r"\s*)*\}"
-    return re.sub(pattern=pattern, repl="", string=hlo)
+    hlo = re.sub(pattern=pattern, repl="", string=hlo)
+    # Strip XLA's stack-frame index (FileNames/FunctionNames/FileLocations/StackFrames),
+    # emitted by jaxlib>=0.10 as_text(). It holds source-location metadata (paths, line/
+    # column numbers) that varies by environment and can spuriously match numeric assertions.
+    stack_frame_pattern = r"\n(?:FileNames|FunctionNames|FileLocations|StackFrames)\n(?:\s*\d+ .*\n)*"
+    return re.sub(pattern=stack_frame_pattern, repl="\n", string=hlo)
 
 
 class ParameterConversionFn(Protocol):

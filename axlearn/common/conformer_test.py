@@ -11,7 +11,7 @@ import pytest
 from absl import logging
 from absl.testing import absltest, parameterized
 from jax import numpy as jnp
-from jax.sharding import NamedSharding, PartitionSpec
+from jax.sharding import AxisType, NamedSharding, PartitionSpec
 
 from axlearn.common.attention import (
     MultiheadAttention,
@@ -395,7 +395,13 @@ class ConformerLayerTest(TestCase):
         # Add XLA_FLAGS=--xla_force_host_platform_device_count=8 before running the test
         if not is_supported_mesh_shape(mesh_shape):
             self.skipTest(f"Unsupported mesh shape {mesh_shape}")
-        with jax.make_mesh(mesh_shape, ("data", "fsdp", "seq", "model")) as mesh:
+        # Auto-typed axes match production (`jax.sharding.Mesh`); JAX 0.10 flipped
+        # `jax.make_mesh`'s default to Explicit, which rejects `with_sharding_constraint`
+        # and requires `out_sharding` on sharded-contracting einsums.
+        axis_names = ("data", "fsdp", "seq", "model")
+        with jax.make_mesh(
+            mesh_shape, axis_names, axis_types=(AxisType.Auto,) * len(axis_names)
+        ) as mesh:
             num_heads = 2
             cfg = ConformerLayer.default_config().set(name="conformer", input_dim=data_shape[-1])
             cfg.self_attention.attention.num_heads = num_heads

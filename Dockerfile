@@ -2,7 +2,7 @@
 
 ARG TARGET=base
 ARG BASE_IMAGE=ubuntu:24.04
-ARG BASE_IMAGE_COLOCATED=us-docker.pkg.dev/cloud-tpu-v2-images/pathways-colocated-python/sidecar:2026_02_09-python_3.12-jax_0.8.3
+ARG BASE_IMAGE_COLOCATED=us-docker.pkg.dev/cloud-tpu-v2-images/pathways-colocated-python/sidecar:20260701_0025-python_3.12-jax_0.10.2
 
 FROM ${BASE_IMAGE} AS base
 
@@ -100,13 +100,43 @@ RUN \
     # 2. Override numpy and scipy with specific versions
     uv pip install numpy==2.1.1 scipy==1.15.3 && \
     \
-    # 3. Verify that the colocated_python_cpu_client is present.
+    # 3. Verify that the colocated_python API is present.
     echo "--> Verifying JAX patch integrity..." && \
-    python -c "from jax._src.lib import _jax; _jax.colocated_python_cpu_client" && \
+    python -c "import jax.experimental.colocated_python as cp; cp.colocated_python" && \
     echo "--> JAX patch verification successful." && \
     \
     # 4. Clean the cache to keep the image slim.
     uv cache clean
+
+################################################################################
+# GPU container spec.                                                          #
+################################################################################
+
+FROM base AS gpu
+
+# Enable the CUDA repository and install the required libraries (libnvrtc.so)
+RUN curl -o cuda-keyring_1.1-1_all.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
+    dpkg -i cuda-keyring_1.1-1_all.deb && \
+    apt-get update && apt-get install -y cuda-libraries-dev-12-8 ibverbs-utils && \
+    apt clean -y
+COPY pyproject.toml README.md /root/
+RUN uv pip install -qq .[core,gpu] && uv cache clean
+COPY . .
+
+################################################################################
+# GPU (ARM) container spec.                                                    #
+################################################################################
+
+FROM base AS gpu-arm
+
+# Enable the CUDA repository and install the required libraries (libnvrtc.so)
+RUN curl -o cuda-keyring_1.1-1_all.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb && \
+    dpkg -i cuda-keyring_1.1-1_all.deb && \
+    apt-get update && apt-get install -y cuda-libraries-dev-12-8 ibverbs-utils && \
+    apt clean -y
+COPY pyproject.toml README.md /root/
+RUN uv pip install -qq .[core,gpu] && uv cache clean
+COPY . .
 
 ################################################################################
 # Final target spec.                                                           #

@@ -188,8 +188,9 @@ class SpmdTrainer(Module):
         # If None, defaults to 2.
         # See https://docs.jax.dev/en/latest/profiling.html#general-options
         host_tracer_level: Optional[int] = None
-        # Device tracer level (0 or 1). If None, defaults to 1.
-        # See https://docs.jax.dev/en/latest/profiling.html#general-options
+        # Device tracer level (0 or 1). If None, defaults to 1 (device tracing enabled).
+        # In JAX 0.10.2+, this is passed via advanced_configuration rather than as a
+        # direct ProfileOptions attribute.
         device_tracer_level: Optional[int] = None
         # Python tracer level (0 or 1). If None, defaults to 0.
         # See https://docs.jax.dev/en/latest/profiling.html#general-options
@@ -1396,12 +1397,23 @@ class SpmdTrainer(Module):
             profiler_options = jax.profiler.ProfileOptions()
             if cfg.host_tracer_level is not None:
                 profiler_options.host_tracer_level = cfg.host_tracer_level
-            if cfg.device_tracer_level is not None:
-                profiler_options.device_tracer_level = cfg.device_tracer_level
             if cfg.python_tracer_level is not None:
                 profiler_options.python_tracer_level = cfg.python_tracer_level
+            # In JAX 0.10.2+, device_tracer_level and tpu_trace_mode are set via
+            # advanced_configuration (device_tracer_level is no longer a direct attribute
+            # of ProfileOptions).
+            advanced_config = {}
+            if cfg.device_tracer_level is not None:
+                advanced_config["device_tracer_level"] = str(cfg.device_tracer_level)
+            else:
+                # Default to level 1 (device tracing enabled) to ensure TPU/GPU traces
+                # are captured. JAX 0.10.2 no longer enables this by default via
+                # ProfileOptions.
+                advanced_config["device_tracer_level"] = "1"
             if cfg.tpu_trace_mode is not None:
-                profiler_options.advanced_configuration = {"tpu_trace_mode": cfg.tpu_trace_mode}
+                advanced_config["tpu_trace_mode"] = cfg.tpu_trace_mode
+            if advanced_config:
+                profiler_options.advanced_configuration = advanced_config
             jax.profiler.start_trace(
                 self.summary_writer.config.dir, profiler_options=profiler_options
             )

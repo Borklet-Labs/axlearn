@@ -73,5 +73,8 @@ py_test(
     deps = [
         ":imagenet_trainer",
         "//axlearn/experiments:test_utils",
+        "@axlearn_pip//tensorboard",
+        "@axlearn_pip//tensorboard_plugin_profile",
+        "@axlearn_pip//xprof",
     ],
 )

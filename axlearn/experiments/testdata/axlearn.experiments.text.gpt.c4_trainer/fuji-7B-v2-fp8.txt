@@ -22,7 +22,7 @@ evalers['train'].input.batcher.pad_example_fn: 'axlearn.common.input_tf_data.def
 evalers['train'].input.batcher.prefetch_buffer_size: -1
 evalers['train'].input.input_dispatcher.global_logical_batch_size: 1024
 evalers['train'].input.input_dispatcher.klass: 'axlearn.common.input_dispatch.SpmdInputDispatcher'
-evalers['train'].input.input_dispatcher.partition_spec: PartitionSpec(('data', 'expert', 'fsdp'),)
+evalers['train'].input.input_dispatcher.partition_spec: P(('data', 'expert', 'fsdp'),)
 evalers['train'].input.is_training: False
 evalers['train'].input.klass: 'axlearn.common.input_tf_data.Input'
 evalers['train'].input.processor.fn: 'axlearn.common.input_tf_data.identity'
@@ -52,7 +52,7 @@ evalers['validation'].input.batcher.pad_example_fn: 'axlearn.common.input_tf_dat
 evalers['validation'].input.batcher.prefetch_buffer_size: -1
 evalers['validation'].input.input_dispatcher.global_logical_batch_size: 1024
 evalers['validation'].input.input_dispatcher.klass: 'axlearn.common.input_dispatch.SpmdInputDispatcher'
-evalers['validation'].input.input_dispatcher.partition_spec: PartitionSpec(('data', 'expert', 'fsdp'),)
+evalers['validation'].input.input_dispatcher.partition_spec: P(('data', 'expert', 'fsdp'),)
 evalers['validation'].input.is_training: False
 evalers['validation'].input.klass: 'axlearn.common.input_tf_data.Input'
 evalers['validation'].input.processor.fn: 'axlearn.common.input_tf_data.identity'
@@ -77,10 +77,10 @@ input.batcher.pad_example_fn: 'axlearn.common.input_tf_data.default_pad_example_
 input.batcher.prefetch_buffer_size: -1
 input.input_dispatcher.global_logical_batch_size: 1024
 input.input_dispatcher.klass: 'axlearn.common.input_dispatch.SpmdInputDispatcher'
-input.input_dispatcher.partition_spec: PartitionSpec(('data', 'expert', 'fsdp'),)
+input.input_dispatcher.partition_spec: P(('data', 'expert', 'fsdp'),)
 input.input_partitioner.fn: 'axlearn.common.input_base.partition_by_path_rank'
-input.input_partitioner.path_rank_to_partition[(None, 1)]: PartitionSpec(('data', 'expert', 'fsdp'),)
-input.input_partitioner.path_rank_to_partition[(None, 2)]: PartitionSpec(('data', 'expert', 'fsdp'), 'seq')
+input.input_partitioner.path_rank_to_partition[(None, 1)]: P(('data', 'expert', 'fsdp'),)
+input.input_partitioner.path_rank_to_partition[(None, 2)]: P(('data', 'expert', 'fsdp'), 'seq')
 input.is_training: True
 input.klass: 'axlearn.common.input_tf_data.Input'
 input.processor.fn: 'axlearn.common.input_tf_data.identity'
@@ -170,7 +170,7 @@ mesh_rules[3][1].config_modifiers[0].mesh_shape[4]: 1
 mesh_rules[3][1].config_modifiers[0].mesh_shape[5]: 1
 mesh_rules[3][1].config_modifiers[1].klass: 'axlearn.common.trainer_config_modifier.RematSpecModifier'
 mesh_rules[3][1].config_modifiers[1].remat_policies['model.decoder.transformer.layer']['prevent_cse']: False
-mesh_rules[3][1].config_modifiers[1].remat_policies['model.decoder.transformer.layer']['policy']: 'jax._src.ad_checkpoint.dots_saveable'
+mesh_rules[3][1].config_modifiers[1].remat_policies['model.decoder.transformer.layer']['policy']['only_if_no_batch_dims']: False
 mesh_rules[3][1].klass: 'axlearn.common.trainer_config_modifier.ChainConfigModifier'
 mesh_rules[4][0]: 'tpu-v6e-256-(2|4|8)'
 mesh_rules[4][1].config_modifiers[0].klass: 'axlearn.common.trainer_config_modifier.MeshShapeModifier'
@@ -199,7 +199,7 @@ mesh_rules[5][1].config_modifiers[1].remat_policies['model.decoder.transformer.l
 mesh_rules[5][1].config_modifiers[1].remat_policies['model.decoder.transformer.layer']['policy'].combine_fn: 'axlearn.common.utils.combine_fn'
 mesh_rules[5][1].config_modifiers[1].remat_policies['model.decoder.transformer.layer']['policy'].fn: 'axlearn.common.utils.combine_remat_policies'
 mesh_rules[5][1].config_modifiers[1].remat_policies['model.decoder.transformer.layer']['policy'].policy_1: 'axlearn.common.flash_attention.remat.policy'
-mesh_rules[5][1].config_modifiers[1].remat_policies['model.decoder.transformer.layer']['policy'].policy_2: 'jax._src.ad_checkpoint.dots_saveable'
+mesh_rules[5][1].config_modifiers[1].remat_policies['model.decoder.transformer.layer']['policy'].policy_2['only_if_no_batch_dims']: False
 mesh_rules[5][1].klass: 'axlearn.common.trainer_config_modifier.ChainConfigModifier'
 mesh_rules[6][0]: 'gpu-(p5.48xlarge|p4de.24xlarge)-(256|512|1024)'
 mesh_rules[6][1][0]: 1

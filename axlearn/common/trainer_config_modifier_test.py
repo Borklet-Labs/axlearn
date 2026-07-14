@@ -46,25 +46,25 @@ class RematSpecModifierTest(test_utils.TestCase):
                 remat_policies={
                     "model.linear": RematSpec(
                         prevent_cse=True,
-                        policy=jax.ad_checkpoint.checkpoint_policies.dots_saveable,
+                        policy=jax.checkpoint_policies.dots_saveable,
                     ),
                 }
             )
             .instantiate()
         )
         cfg = cfg_modifier(cfg)
-        self.assertRegex(str(cfg.model.linear), "dots_saveable")
+        self.assertRegex(str(cfg.model.linear), "only_if_no_batch_dims")
         cfg_modifier = (
             RematSpecModifier.default_config()
             .set(
                 remat_policies={
                     "model.linear": RematSpec(
                         prevent_cse=True,
-                        policy=jax.ad_checkpoint.checkpoint_policies.dots_saveable,
+                        policy=jax.checkpoint_policies.dots_saveable,
                     ),
                     "model.unknown": RematSpec(
                         prevent_cse=True,
-                        policy=jax.ad_checkpoint.checkpoint_policies.dots_saveable,
+                        policy=jax.checkpoint_policies.dots_saveable,
                     ),
                 }
             )

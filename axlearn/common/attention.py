@@ -82,6 +82,7 @@ from typing import Any, Callable, NamedTuple, Optional, Protocol, Sequence, Unio
 import jax
 from absl import logging
 from jax import numpy as jnp
+from jax.sharding import PartitionSpec
 
 from axlearn.common import param_init
 from axlearn.common.attention_bias import (
@@ -138,7 +139,6 @@ from axlearn.common.repeat import Repeat
 from axlearn.common.utils import (
     Nested,
     NestedTensor,
-    PartitionSpec,
     PartitionSpecType,
     RematPolicy,
     SavePattern,
@@ -492,6 +492,9 @@ class BaseMultiheadLinear(DenseGeneralBaseLayer):
     @property
     def _einsum_expr(self):
         raise NotImplementedError(type(self))
+
+    def _get_output_sharding(self):
+        return None
 
     def forward(self, inputs: Tensor) -> Tensor:
         params = self.parameters
@@ -2076,7 +2079,7 @@ class MultiheadAttention(BaseLayer):
         if not cfg.scale_kv_before_cache_update:
             # This is to maintain the existing behavior of sending pre-scaled K to the next layer.
             kv_state = kv_state._replace(k_proj=k_proj)
-        self.vlog(3, "atten.prob=%s", probs[0, 0, 0, :])
+        self.vlog(3, "atten.prob=%s", probs.mean())
         self.vlog(3, "atten.context=%s", context.sum())
 
         # [batch, target_length, output_dim].
@@ -2136,7 +2139,7 @@ class MultiheadAttention(BaseLayer):
         k_proj, v_proj = k_proj.astype(q_proj.dtype), v_proj.astype(q_proj.dtype)
         logits = self._compute_logits(q_proj, k_proj)
         logits = self._cap_logits(logits)
-        self.vlog(3, "atten.logits=%s", logits[0, 0, 0, :])
+        self.vlog(3, "atten.logits=%s", logits.mean())
         logit_sink = self.parameters.get("sink", None)
         probs = softmax_with_biases(
             logits, attention_logit_biases=attention_logit_biases.value(), logit_sink=logit_sink
@@ -2469,7 +2472,7 @@ class SigmoidAttention(MultiheadAttention):
         k_proj, v_proj = k_proj.astype(q_proj.dtype), v_proj.astype(q_proj.dtype)
         logits = self._compute_logits(q_proj, k_proj)
         logits = self._cap_logits(logits)
-        self.vlog(3, "atten.logits=%s", logits[0, 0, 0, :])
+        self.vlog(3, "atten.logits=%s", logits.mean())
 
         attention_logit_biases = attention_logit_biases.value()
         if attention_logit_biases is None:

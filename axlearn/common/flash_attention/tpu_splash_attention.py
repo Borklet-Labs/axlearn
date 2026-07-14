@@ -36,15 +36,17 @@ contribution.
 # pytype: skip-file
 from __future__ import annotations
 
-import dataclasses
+# import dataclasses
 import functools
 from typing import Literal, overload
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax import ad_checkpoint, lax, tree_util
+from jax import lax, tree_util
 from jax._src.pallas.mosaic import random as plrandom
+from jax._src.pallas.mosaic.primitives import repeat as _pltpu_repeat
+from jax.ad_checkpoint import checkpoint_name
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_mask as mask_lib
@@ -178,9 +180,9 @@ def flash_attention_kernel(
         q = q_ref[...] if q_layout == HEAD_DIM_MINOR else q_ref[...].T
         qk_dims = NT_DIM_NUMBERS if k_layout == HEAD_DIM_MINOR else NN_DIM_NUMBERS
         if k_layout == HEAD_DIM_MINOR:
-            k = pl.load(k_ref, (slice_k, slice(None)))
+            k = k_ref[slice_k, :]
         else:
-            k = pl.load(k_ref, (slice(None), slice_k))
+            k = k_ref[:, slice_k]
         k = k.astype(q.dtype)
 
         # TODO(changlan): Revisit once Mosaic supports higher precision.
@@ -224,7 +226,7 @@ def flash_attention_kernel(
         if rem != 0:
             raise NotImplementedError(f"{bkv_compute=} should be a multiple of {NUM_LANES}")
 
-        s_curr = jnp.exp(qk - pltpu.repeat(m_next, bkv_repeats, axis=1))
+        s_curr = jnp.exp(qk - _pltpu_repeat(m_next, bkv_repeats, axis=1))
         assert s_curr.shape == (bq, bkv_compute)
 
         l_curr = jax.lax.broadcast_in_dim(s_curr.sum(axis=-1), l_prev.shape, (0,))
@@ -236,9 +238,9 @@ def flash_attention_kernel(
 
         sv_dims = NN_DIM_NUMBERS if v_layout == HEAD_DIM_MINOR else NT_DIM_NUMBERS
         if v_layout == HEAD_DIM_MINOR:
-            v = pl.load(v_ref, (slice_k, slice(None)))
+            v = v_ref[slice_k, :]
         else:
-            v = pl.load(v_ref, (slice(None), slice_k))
+            v = v_ref[:, slice_k]
         v = v.astype(float32)
 
         if dropout_rate > 0.0:
@@ -255,7 +257,7 @@ def flash_attention_kernel(
             s_curr = jnp.where(dropout_mask, 0.0, s_curr) / (1.0 - dropout_rate)
         o_curr = lax.dot_general(s_curr, v, sv_dims)
 
-        alpha_o = pltpu.repeat(alpha, head_dim_repeats, axis=1)[..., : o_scratch_ref.shape[-1]]
+        alpha_o = _pltpu_repeat(alpha, head_dim_repeats, axis=1)[..., : o_scratch_ref.shape[-1]]
         o_scratch_ref[:] = alpha_o * o_scratch_ref[:] + o_curr
 
     @pl.when(should_run)
@@ -270,7 +272,7 @@ def flash_attention_kernel(
         if logit_sink_ref is not None:
             sink_value = logit_sink_ref[h].astype(jnp.float32)
             l = l + jnp.exp(sink_value - m_scratch_ref[...])
-        l_inv = pltpu.repeat(1.0 / l, head_dim_repeats, axis=1)[..., : o_scratch_ref.shape[-1]]
+        l_inv = _pltpu_repeat(1.0 / l, head_dim_repeats, axis=1)[..., : o_scratch_ref.shape[-1]]
         o_ref[...] = (o_scratch_ref[...] * l_inv).astype(o_ref.dtype)
         if logsumexp_ref is not None:
             assert logsumexp_ref.shape == (bq, NUM_LANES)
@@ -586,7 +588,6 @@ def _splash_attention_forward(
         out_specs += [None]
 
     kernel_name = get_kernel_name(
-        dataclasses.asdict(block_sizes),
         is_mqa=is_mqa,
         save_residuals=save_residuals,
         is_segmented=segment_ids is not None,
@@ -656,9 +657,9 @@ def _splash_attention_forward(
         logsumexp = logsumexp[..., 0]
 
     if residual_checkpoint_name is not None:
-        out = ad_checkpoint.checkpoint_name(out, name=residual_checkpoint_name)
+        out = checkpoint_name(out, name=residual_checkpoint_name)
         if logsumexp is not None:
-            logsumexp = ad_checkpoint.checkpoint_name(logsumexp, name=residual_checkpoint_name)
+            logsumexp = checkpoint_name(logsumexp, name=residual_checkpoint_name)
     if save_residuals:
         return out, (logsumexp,)
     return out
@@ -1088,13 +1089,6 @@ def _splash_attention_bwd_dq(
     num_scalar_prefetch = 3
 
     kernel_name = get_kernel_name(
-        dict(
-            block_q_dq=bq,
-            block_kv_dq=bkv,
-            q_layout=q_layout,
-            k_layout=k_layout,
-            v_layout=v_layout,
-        ),
         is_mqa=is_mqa,
         save_residuals=False,
         is_segmented=segment_ids is not None,
@@ -1225,14 +1219,14 @@ def _flash_attention_dkv_kernel(
 
         def _load_kv(ref, layout):
             if layout == HEAD_DIM_MINOR:
-                return pl.load(ref, (slice_k, slice(None)))
-            return pl.load(ref, (slice(None), slice_k)).T
+                return ref[slice_k, :]
+            return ref[:, slice_k].T
 
         k = _load_kv(k_ref, k_layout).astype(q.dtype)
         v = _load_kv(v_ref, v_layout).astype(q.dtype)
-        logsumexp = pl.load(logsumexp_ref, (pl.ds(1), slice(None)))
+        logsumexp = logsumexp_ref[pl.ds(1), :]
         do = do_ref[...]
-        di = pl.load(di_ref, (pl.ds(1), slice(None)))
+        di = di_ref[pl.ds(1), :]
 
         qk_dims = NT_DIM_NUMBERS if q_layout == HEAD_DIM_MINOR else NN_DIM_NUMBERS
         # TODO(changlan): Revisit once Mosaic supports higher precision.
@@ -1298,8 +1292,8 @@ def _flash_attention_dkv_kernel(
             preferred_element_type=jnp.float32,
             precision=precision,
         )
-        dv = dv.astype(dv_scratch_ref.dtype) + pl.load(dv_scratch_ref, (slice_k, slice(None)))
-        pl.store(dv_scratch_ref, (slice_k, slice(None)), dv)
+        dv = dv.astype(dv_scratch_ref.dtype) + dv_scratch_ref[slice_k, :]
+        dv_scratch_ref[slice_k, :] = dv
 
         ds = (dp - di) * p
         if attn_logits_soft_cap is not None:
@@ -1315,8 +1309,8 @@ def _flash_attention_dkv_kernel(
             preferred_element_type=jnp.float32,
             precision=precision,
         )
-        dk = dk.astype(dk_scratch_ref.dtype) + pl.load(dk_scratch_ref, (slice_k, slice(None)))
-        pl.store(dk_scratch_ref, (slice_k, slice(None)), dk)
+        dk = dk.astype(dk_scratch_ref.dtype) + dk_scratch_ref[slice_k, :]
+        dk_scratch_ref[slice_k, :] = dk
         if dq_scratch_ref is not None or dq_ref is not None:
             dq = lax.dot_general(
                 ds.T.astype(k.dtype),
@@ -1683,14 +1677,6 @@ def _splash_attention_bwd_dkv(
     num_scalar_prefetch = 4
 
     kernel_name = get_kernel_name(
-        dict(
-            block_q_dkv=bq,
-            block_kv_dkv=bkv,
-            block_kv_dkv_compute=bkv_compute,
-            q_layout=q_layout,
-            k_layout=k_layout,
-            v_layout=v_layout,
-        ),
         is_mqa=is_mqa,
         save_residuals=False,
         is_segmented=segment_ids is not None,
