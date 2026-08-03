@@ -45,7 +45,7 @@ if instance_type != "none":
 from absl import flags, logging  # noqa: E402
 
 from axlearn.common.status_server import StatusHTTPServer  # noqa: E402
-from axlearn.common.utils import get_data_dir  # noqa: E402
+from axlearn.common.utils import get_data_dir, live_devices  # noqa: E402
 from axlearn.common.utils_spmd import setup as setup_spmd  # noqa: E402
 
 flags.DEFINE_string(
