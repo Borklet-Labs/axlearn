@@ -15,6 +15,11 @@ from axlearn.common import compiler_options
 
 instance_type = os.environ.get("TPU_TYPE", "none")
 num_tpu_slices = int(os.environ.get("NUM_TPU_SLICES", 1))
+print("NUM TPU SLICES by camilo", num_tpu_slices)
+if any("jax_backend=proxy" in arg for arg in sys.argv) or "proxy" in sys.argv:
+    # Pathways (proxy) handles multislice internally. We must not pass Megascale
+    # flags to proxy workers through client LIBTPU_INIT_ARGS.
+    num_tpu_slices = 1
 
 # Set LIBTPU_INIT_ARGS before importing jax!
 tpu_flags_exc = None
